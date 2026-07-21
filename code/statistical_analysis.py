@@ -252,7 +252,7 @@ def multiple_regression_analysis(df: pd.DataFrame, scale: str = "L2") -> dict:
     model = sm.OLS(y, X_const).fit()
 
     x_sd = X.std()
-    x_sd = x_sd.replace(0, np.nan)  # 零方差列 → NaN，避免除零
+    x_sd = x_sd.replace(0, np.nan)  # zero-variance columns -> NaN to avoid division by zero
     X_std = (X - X.mean()) / x_sd
     y_sd = y.std()
     y_std = (y - y.mean()) / y_sd if y_sd > 0 else y - y.mean()

@@ -8,6 +8,12 @@ as the basic unit:
 3. Compute structural indicators + bond percolation simulation -> robustness metrics
 4. Export match_summary.csv (match level) and batch_summary.csv (season summary level)
 
+Revised protocol (July 2026 revision): 100 Monte Carlo trials at all four
+scales (previously 20 for L2, 5 otherwise), and critical thresholds located
+with the peak-validity restriction (susceptibility argmax restricted to
+removal fractions where P_inf >= 5% of its initial value). See
+robustness.py for details.
+
 Input:  StatsBomb event data directory (DATA_ROOT)
 Output: ../../data/match_summary.csv, ../../data/batch_summary.csv
 
@@ -17,7 +23,7 @@ Usage:
     python batch_runner.py          # Full run
     python batch_runner.py --test   # Test mode (EPL 22/23 only, first 50 files)
 
-Last modified: 2026-03-27
+Last modified: 2026-07-21
 """
 
 import argparse
@@ -73,8 +79,18 @@ SEASONS = {
 SCALES_TO_ANALYZE = ["L0", "L1", "L2", "L3"]
 
 PERCOLATION_STEPS = 50
-PERCOLATION_TRIALS_L2 = 20
-PERCOLATION_TRIALS_OTHER = 5
+
+# Revised protocol: 100 Monte Carlo trials at all four scales
+# (the original submission used 20 trials for L2 and 5 for L0/L1/L3)
+PERCOLATION_TRIALS = 100
+
+# Fixed random seed for the Monte Carlo edge orderings: results are
+# bit-reproducible across runs (Attack removal is deterministic and unseeded)
+PERCOLATION_SEED = 42
+
+# Peak-validity restriction: the susceptibility argmax is restricted to
+# removal fractions where P_inf >= 5% of its initial value
+PINF_RESTRICTION_FRACTION = 0.05
 
 MATCH_RESULT_COLUMNS = [
     "League",
@@ -354,14 +370,12 @@ class BatchAnalyzer:
 
         directed_indicators = compute_directed_indicators(graph)
 
-        n_trials = PERCOLATION_TRIALS_L2 if scale == "L2" else PERCOLATION_TRIALS_OTHER
-
         sim_error = multi_trial_edge_removal(
             graph,
             method="error",
             n_steps=PERCOLATION_STEPS,
-            n_trials=n_trials,
-            seed=42,
+            n_trials=PERCOLATION_TRIALS,
+            seed=PERCOLATION_SEED,
         )
         sim_attack = edge_removal_simulation(
             graph,
@@ -369,10 +383,16 @@ class BatchAnalyzer:
             n_steps=PERCOLATION_STEPS,
         )
 
-        fc_error_s, chi_error_s = find_critical_threshold(sim_error, "strong")
-        fc_error_w, chi_error_w = find_critical_threshold(sim_error, "weak")
-        fc_attack_s, chi_attack_s = find_critical_threshold(sim_attack, "strong")
-        fc_attack_w, chi_attack_w = find_critical_threshold(sim_attack, "weak")
+        # Revised protocol: peak-validity restriction applied to both Error
+        # and Attack, and to both SCGC (strong) and WGCC (weak)
+        fc_error_s, chi_error_s = find_critical_threshold(
+            sim_error, "strong", min_pinf_fraction=PINF_RESTRICTION_FRACTION)
+        fc_error_w, chi_error_w = find_critical_threshold(
+            sim_error, "weak", min_pinf_fraction=PINF_RESTRICTION_FRACTION)
+        fc_attack_s, chi_attack_s = find_critical_threshold(
+            sim_attack, "strong", min_pinf_fraction=PINF_RESTRICTION_FRACTION)
+        fc_attack_w, chi_attack_w = find_critical_threshold(
+            sim_attack, "weak", min_pinf_fraction=PINF_RESTRICTION_FRACTION)
 
         r_error_s = calculate_robustness_integral(sim_error, "strong")
         r_error_w = calculate_robustness_integral(sim_error, "weak")

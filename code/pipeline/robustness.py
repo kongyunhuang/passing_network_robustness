@@ -16,16 +16,25 @@ Functionality:
 Input:  NetworkX directed graph (DiGraph or MultiDiGraph)
 Output: Percolation curve DataFrame, critical threshold, robustness integral
 
+Revised protocol (July 2026 revision):
+- Monte Carlo trials: B = 100 at all scales (previously 20 for L2, 5 otherwise)
+- Peak-validity restriction: the susceptibility argmax is restricted to the
+  removal fractions f where P_inf(f) >= 0.05 * P_inf(0), suppressing spurious
+  chi peaks that arise after the giant component has effectively vanished
+  (pass min_pinf_fraction=0.05 to find_critical_threshold)
+- The restriction applies to both random removal (Error) and targeted
+  removal (Attack), and to both SCGC and WGCC order parameters
+
 Usage:
     from pipeline.robustness import (
         multi_trial_edge_removal, find_critical_threshold,
         calculate_robustness_integral, calculate_molloy_reed_threshold,
     )
-    sim = multi_trial_edge_removal(G, method='error', n_steps=50, n_trials=20)
-    fc, chi_max = find_critical_threshold(sim, 'strong')
+    sim = multi_trial_edge_removal(G, method='error', n_steps=50, n_trials=100)
+    fc, chi_max = find_critical_threshold(sim, 'strong', min_pinf_fraction=0.05)
     R = calculate_robustness_integral(sim, 'strong')
 
-Last modified: 2026-03-27
+Last modified: 2026-07-21
 """
 
 import random
@@ -161,14 +170,16 @@ def multi_trial_edge_removal(
     G,
     method: str = 'error',
     n_steps: int = 50,
-    n_trials: int = 20,
+    n_trials: int = 100,
     seed: int = 42
 ) -> pd.DataFrame:
     """
     Multi-trial bond percolation simulation, returning averaged results.
 
     Attack mode executes only 1 trial (deterministic ordering).
-    Error mode executes n_trials random orderings and averages.
+    Error mode executes n_trials random orderings and averages the four
+    curve columns (P_inf and Chi, strong and weak) pointwise over trials;
+    critical thresholds are subsequently located on the averaged chi curve.
 
     Args:
         G: Directed network
@@ -206,7 +217,8 @@ def multi_trial_edge_removal(
 
 def find_critical_threshold(
     sim_results: pd.DataFrame,
-    component_type: str = 'strong'
+    component_type: str = 'strong',
+    min_pinf_fraction: float = None
 ) -> Tuple[float, float]:
     """
     Find the critical threshold f_c (susceptibility peak position) from simulation results.
@@ -214,6 +226,14 @@ def find_critical_threshold(
     Args:
         sim_results: Percolation simulation result DataFrame
         component_type: 'strong' (SCGC) or 'weak' (WGCC)
+        min_pinf_fraction: Peak-validity restriction (revised protocol).
+            If set (e.g. 0.05), the susceptibility argmax is restricted to
+            rows where P_inf >= min_pinf_fraction * P_inf(f=0), suppressing
+            spurious chi peaks located after the giant component has
+            effectively vanished. If no row satisfies the restriction, or
+            the restricted chi curve is identically zero, returns (nan, 0.0).
+            Default None reproduces the unrestricted (original submission)
+            behaviour.
 
     Returns:
         (f_c, max_chi): Critical threshold and susceptibility peak value
@@ -227,6 +247,15 @@ def find_critical_threshold(
         chi_col = 'Susceptibility'
         if chi_col not in sim_results.columns:
             return 0.0, 0.0
+
+    if min_pinf_fraction is not None:
+        p_col = f'P_inf_{component_type}'
+        p0 = sim_results[p_col].iloc[0]
+        valid = sim_results[sim_results[p_col] >= min_pinf_fraction * p0]
+        if valid.empty or valid[chi_col].max() == 0:
+            return np.nan, 0.0
+        peak_row = valid.loc[valid[chi_col].idxmax()]
+        return peak_row['f'], peak_row[chi_col]
 
     max_chi = sim_results[chi_col].max()
     if max_chi == 0:
