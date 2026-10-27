@@ -1,90 +1,90 @@
 """
-fig_baena_case.py — Baena case study: edge removal network visualisation (Fig. 8)
-=================================================================================
-Illustrates Baena's structural contribution in Villarreal vs Girona (24/25
-season, match 3946543):
-(a) Complete passing network, highlighting Baena's critical edges (red) and
-    non-critical edges (dashed orange)
-(b) Network after removing all of Baena's edges, SCGC drops by 39%
-(c) Horizontal bar chart ranking each critical edge by SCGC drop + cumulative line
+fig9_baena_case.py  Case study of Baena's structural contribution (Fig. 9)
+========================================================================
+Builds Villarreal's L2 passing network against Girona (2024/25 La Liga,
+match 3946543) with substitutes mapped to the players they replaced, and
+removes Baena's edges one at a time and all together. (a) Full network with
+his critical and redundant edges, (b) network after removing all his edges,
+(c) critical edges ranked by single-edge SCGC decrease with the cumulative curve.
 
-Note: This script requires raw StatsBomb event JSON data and the shared data
-      pipeline modules (network_builder, robustness). Users must set the
-      DATA_ROOT path and ensure the pipeline directory is on sys.path.
+Input  DATA_ROOT/*/3946543_events.json (StatsBomb event JSON)
+Output  figures/fig9.png, figures/fig9.pdf
 
-Input:  StatsBomb raw event JSON (DATA_ROOT), data/match_summary.csv
-Output: figures/fig8.png, figures/fig8.pdf
+Usage
+  DATA_ROOT=/path/to/statsbomb/datos python code/fig9_baena_case.py
 
-Usage:
-  python code/fig_baena_case.py
-
-Last modified: 2026-03-27
+Last modified 2026-10-27
 """
 
 import matplotlib
 matplotlib.use('Agg')
+
 import sys
 import json
 import glob
 import os
-import pandas as pd
+from pathlib import Path
+
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from pathlib import Path
 
-# ============================================================================
-# Paths
-# ============================================================================
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / 'data'
-OUTPUT_DIR = BASE_DIR / 'figures'
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+sys.path.insert(0, str(BASE_DIR / 'code' / 'pipeline'))
 
-# ============================================================================
-# DATA_ROOT: Users must set this path to the root directory of StatsBomb
-# raw event JSON data. Directory structure should be:
-# DATA_ROOT/{competition_id}_{season_id}/{match_id}_events.json
-# ============================================================================
-# Set this to your local StatsBomb event data directory
-DATA_ROOT = Path('data/raw')
-
-# ============================================================================
-# Shared data pipeline dependencies: network_builder, robustness
-# Users must ensure these modules are available on the Python path
-# ============================================================================
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'pipeline'))
 from network_builder import ZonalNetworkBuilder
 from robustness import calculate_metrics_directed
 
-# ============================================================================
-# Publication style
-# ============================================================================
 plt.rcParams.update({
-    'font.size': 11, 'axes.titlesize': 12, 'axes.labelsize': 11,
-    'figure.dpi': 300, 'savefig.dpi': 300,
-    'font.family': 'serif', 'font.serif': ['Times New Roman', 'Times', 'DejaVu Serif'],
+    'font.size': 11,
+    'axes.titlesize': 12,
+    'axes.labelsize': 11,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'font.family': 'serif',
+    'font.serif': ['Times New Roman', 'Times', 'DejaVu Serif'],
     'mathtext.fontset': 'cm',
 })
 
+# Root directory of the StatsBomb event data (set the DATA_ROOT environment variable)
+DATA_ROOT = Path(os.environ.get('DATA_ROOT', '/path/to/statsbomb/datos'))
+OUTPUT_DIR = BASE_DIR / 'figures'
+
 builder = ZonalNetworkBuilder()
 
-MATCH_ID = 3946543
+MATCH_ID = 3946543  # Villarreal vs Girona, 2024/25
 TEAM = 'Villarreal'
-TARGET_PLAYER = 'Alejandro Baena Rodriguez'
+TARGET_PLAYER = 'Alejandro Baena Rodríguez'
 
-SHORT_NAMES = {'Alejandro Baena Rodriguez': 'Baena'}
-LABEL_OFFSETS = {'Baena': (8, -5)}
+# Values printed in the article (Section 3.5 and the Fig. 9 caption) and in Fig. 9c
+PUBLISHED = {
+    'scgc_before': 0.533,      # 3 decimals
+    'scgc_after': 0.326,       # 3 decimals
+    'decrease_pct': 39,        # integer percent
+    'top3_share_pct': 47,      # integer percent
+    'n_critical': 14,
+    'n_edges': 56,
+    'n_redundant': 42,
+    'drops': [0.0667, 0.0667, 0.0444, 0.0370, 0.0296, 0.0296, 0.0222,
+              0.0222, 0.0148, 0.0148, 0.0074, 0.0074, 0.0074, 0.0074],  # 4 decimals
+}
+
+# Custom short names
+SHORT_NAMES = {
+    'Alejandro Baena Rodríguez': 'Baena',
+}
+
+# Label offsets chosen from the plotted coordinates so that the labels of
+# Baena, Muñoz, Barry and Gueye do not overlap. dy > 0 places a label above
+# the node in the displayed figure (the sign is flipped when drawing because
+# the pitch y axis points down), dx > 0 places it to the right.
+LABEL_OFFSETS = {
+    'Baena': (6, 6),      # upper right, clear of Muñoz (left) and Barry and Gueye (lower right)
+    'Muñoz': (-8, -4),    # lower left, open area
+    'Gueye': (0, -4),     # below
+}
 DEFAULT_OFFSET = (0, 4)
-
-# Colors
-C_CRIT = '#c0392b'
-C_NONCRIT = '#e67e22'
-C_OTHER = '#bdc3c7'
-C_NODE = '#2c3e50'
-C_NODE_OUT = '#95a5a6'
-C_LOST = '#e74c3c'
 
 
 def get_short(full_name):
@@ -95,7 +95,7 @@ def get_short(full_name):
 
 
 def build_network_with_sub(events, team):
-    """Build network with substitution inheritance (11 players)."""
+    """Build the L2 player-zone network with substitution inheritance (11 players)."""
     name_sub_map = {}
     for e in events:
         if e.get('type', {}).get('name') == 'Substitution' and e.get('team', {}).get('name') == team:
@@ -151,7 +151,7 @@ def build_network_with_sub(events, team):
 
 
 def analyze_target_edges(G, target_full):
-    """Analyse target player edges: critical vs non-critical."""
+    """Split the target player's edges into critical and redundant ones."""
     scgc0 = calculate_metrics_directed(G)['P_inf_strong']
     critical = []
     noncritical = []
@@ -162,7 +162,7 @@ def analyze_target_edges(G, target_full):
         Gt = G.copy()
         Gt.remove_edge(u, v)
         drop = scgc0 - calculate_metrics_directed(Gt)['P_inf_strong']
-        label = f'{get_short(u.split("@")[0])}\u2192{get_short(v.split("@")[0])}'
+        label = f'{get_short(u.split("@")[0])}→{get_short(v.split("@")[0])}'
         if drop > 0:
             critical.append({'label': label, 'drop': drop, 'u': u, 'v': v})
         else:
@@ -170,6 +170,7 @@ def analyze_target_edges(G, target_full):
 
     critical.sort(key=lambda x: x['drop'], reverse=True)
 
+    # After removing all of the target player's edges
     all_edges = [(u, v) for u, v in G.edges() if target_full in u or target_full in v]
     G_no = G.copy()
     G_no.remove_edges_from(all_edges)
@@ -182,21 +183,21 @@ def analyze_target_edges(G, target_full):
 
 
 def draw_pitch(ax):
-    """Minimal pitch lines."""
-    ax.set_xlim(-5, 125)
-    ax.set_ylim(-5, 85)
-    ax.set_aspect('equal')
-    ax.set_facecolor('white')
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    lc, lw = '#d0d0d0', 0.6
-    ax.plot([0, 120, 120, 0, 0], [0, 0, 80, 80, 0], color=lc, lw=lw)
-    ax.plot([60, 60], [0, 80], color=lc, lw=lw * 0.7)
-    ax.plot([0, 18, 18, 0], [18, 18, 62, 62], color=lc, lw=lw * 0.7)
-    ax.plot([120, 102, 102, 120], [18, 18, 62, 62], color=lc, lw=lw * 0.7)
-    ax.add_patch(plt.Circle((60, 40), 9.15, fill=False, color=lc, lw=lw * 0.7))
-    ax.set_xticks([])
-    ax.set_yticks([])
+    """StatsBomb pitch from mplsoccer (120 x 80, y axis pointing down, so the
+    attacking team's left flank, low y, appears at the top)."""
+    from mplsoccer import Pitch
+    pitch = Pitch(pitch_type='statsbomb', pitch_color='white',
+                  line_color='#111111', linewidth=0.7, line_alpha=0.4, line_zorder=1)
+    pitch.draw(ax=ax)
+
+
+# Colours
+C_CRIT = '#c0392b'
+C_NONCRIT = '#e67e22'
+C_OTHER = '#bdc3c7'
+C_NODE = '#2c3e50'
+C_NODE_OUT = '#95a5a6'
+C_LOST = '#e74c3c'
 
 
 def draw_network_panel(ax, G_draw, player_pos, player_full, target_short,
@@ -205,6 +206,7 @@ def draw_network_panel(ax, G_draw, player_pos, player_full, target_short,
     """Draw one network panel."""
     target_full_name = player_full.get(target_short, target_short)
 
+    # Edges between other players
     for u, v in G_draw.edges():
         if target_full_name in u or target_full_name in v:
             continue
@@ -218,6 +220,7 @@ def draw_network_panel(ax, G_draw, player_pos, player_full, target_short,
                                         connectionstyle='arc3,rad=0.08'))
 
     if show_target:
+        # Redundant edges (dashed orange)
         for u, v in noncritical_edges:
             p1 = get_short(u.split('@')[0])
             p2 = get_short(v.split('@')[0])
@@ -228,6 +231,7 @@ def draw_network_panel(ax, G_draw, player_pos, player_full, target_short,
                             arrowprops=dict(arrowstyle='->', color=C_NONCRIT, lw=0.4, alpha=0.2,
                                             connectionstyle='arc3,rad=0.08', linestyle='--'))
 
+        # Critical edges (red, width proportional to the SCGC decrease)
         if critical_edges:
             mx = max([d['drop'] for d in critical_edges])
             for d in sorted(critical_edges, key=lambda x: x['drop']):
@@ -241,9 +245,11 @@ def draw_network_panel(ax, G_draw, player_pos, player_full, target_short,
                                 arrowprops=dict(arrowstyle='->', color=C_CRIT, lw=lw, alpha=0.75,
                                                 connectionstyle='arc3,rad=0.1'))
 
+    # Player nodes
     for p, (x, y) in player_pos.items():
         full = player_full.get(p, p)
         dx, dy = LABEL_OFFSETS.get(p, DEFAULT_OFFSET)
+        dy = -dy  # the pitch y axis points down, so flip to keep the displayed direction
 
         if p == target_short:
             if show_target:
@@ -279,24 +285,63 @@ def draw_network_panel(ax, G_draw, player_pos, player_full, target_short,
                         color='#555', zorder=9)
 
 
+def check_published_values(scgc0, scgc_no, critical, noncritical, all_edges):
+    """Acceptance check against the published values, within half a unit of the printed precision."""
+    drops = [d['drop'] for d in critical]
+    decrease = (scgc0 - scgc_no) / scgc0 * 100
+    top3 = sum(drops[:3]) / sum(drops) * 100
+    checks = [
+        ('SCGC before removal', scgc0, PUBLISHED['scgc_before'], 0.0005, '.3f'),
+        ('SCGC after removal', scgc_no, PUBLISHED['scgc_after'], 0.0005, '.3f'),
+        ('SCGC decrease (%)', decrease, PUBLISHED['decrease_pct'], 0.5, '.1f'),
+        ('top three edges share (%)', top3, PUBLISHED['top3_share_pct'], 0.5, '.1f'),
+        ('critical edges', len(critical), PUBLISHED['n_critical'], 0, 'd'),
+        ('directed edges of Baena', len(all_edges), PUBLISHED['n_edges'], 0, 'd'),
+        ('redundant edges', len(noncritical), PUBLISHED['n_redundant'], 0, 'd'),
+    ]
+    print("\nCheck  values against the article and Fig. 9")
+    ok_all = True
+    for name, got, exp, tol, fmt in checks:
+        ok = abs(got - exp) <= tol
+        ok_all &= ok
+        print(f"  {name:<27} {got:{fmt}} vs published {exp}  {'PASS' if ok else 'FAIL'}")
+    ok_drops = len(drops) == len(PUBLISHED['drops'])
+    for i, (got, exp) in enumerate(zip(drops, PUBLISHED['drops'])):
+        if abs(got - exp) > 0.00005:
+            ok_drops = False
+            print(f"  edge {i + 1} drop {got:.4f} vs published {exp:.4f}  FAIL")
+    ok_all &= ok_drops
+    print(f"  {'single-edge drops (c)':<27} {len(drops)} values vs published "
+          f"{len(PUBLISHED['drops'])}  {'PASS' if ok_drops else 'FAIL'}")
+    if not ok_all:
+        print("CHECK FAILED, the values differ from the published article.")
+        sys.exit(1)
+    print("CHECK ALL PASS")
+
+
 def main():
-    # Build file index
+    # Locate the match file
     file_idx = {}
     for ef in glob.glob(str(DATA_ROOT / '*/*_events.json')):
         file_idx[int(os.path.basename(ef).split('_')[0])] = ef
-
+    if MATCH_ID not in file_idx:
+        sys.exit(f"{MATCH_ID}_events.json not found under DATA_ROOT ({DATA_ROOT}), "
+                 "set the DATA_ROOT environment variable")
     with open(file_idx[MATCH_ID]) as f:
         events = json.load(f)
 
+    # Opponent name
     opponent = ''
     for e in events:
         if e.get('type', {}).get('name') == 'Starting XI' and e.get('team', {}).get('name') != TEAM:
             opponent = e.get('team', {}).get('name', '')
             break
 
+    # Build the network
     G, player_pos, player_full = build_network_with_sub(events, TEAM)
     target_short = get_short(TARGET_PLAYER)
 
+    # Edge analysis
     scgc0, scgc_no, critical, noncritical, all_edges, G_no, scc_b, scc_a = \
         analyze_target_edges(G, TARGET_PLAYER)
 
@@ -305,7 +350,11 @@ def main():
 
     print(f"SCGC: {scgc0:.3f} -> {scgc_no:.3f} (-{(scgc0 - scgc_no) / scgc0 * 100:.1f}%)")
     print(f"{target_short}: {len(critical)} critical / {len(all_edges)} total edges")
+    print(f"Players: {len(player_pos)}")
 
+    check_published_values(scgc0, scgc_no, critical, noncritical, all_edges)
+
+    # Figure
     fig = plt.figure(figsize=(7.2, 6.5))
     gs_top = gridspec.GridSpec(1, 2, wspace=0.08, left=0.01, right=0.99, top=0.95, bottom=0.52)
     gs_bot = gridspec.GridSpec(1, 1, left=0.12, right=0.95, top=0.44, bottom=0.02)
@@ -330,10 +379,10 @@ def main():
     ax_b.text(0.5, 1.03, f'(b)  After removing {target_short}\'s edges',
               transform=ax_b.transAxes, fontsize=12, ha='center', fontweight='bold')
     ax_b.text(0.5, -0.03,
-              f'SCGC = {scgc_no:.3f}   |   \u0394SCGC = \u2212{(scgc0 - scgc_no) / scgc0 * 100:.0f}%',
+              f'SCGC = {scgc_no:.3f}   |   ΔSCGC = −{(scgc0 - scgc_no) / scgc0 * 100:.0f}%',
               transform=ax_b.transAxes, fontsize=9, ha='center', color='#666')
 
-    # (c) Bar chart
+    # (c) Horizontal bar chart
     ax_c = fig.add_subplot(gs_bot[0, 0])
     n_bars = len(critical)
     y_pos = np.arange(n_bars)
@@ -354,6 +403,7 @@ def main():
     for i, d in enumerate(drops):
         ax_c.text(d + 0.0005, i, f'{d:.4f}', va='center', fontsize=8, color='#555')
 
+    # Cumulative curve
     cum = np.cumsum(drops)
     ax_c2 = ax_c.twiny()
     ax_c2.plot(cum, y_pos, 'o-', color='#2980b9', ms=3, lw=1, alpha=0.7)
@@ -371,10 +421,12 @@ def main():
     ax_c.spines['top'].set_visible(False)
     ax_c.spines['right'].set_visible(False)
 
-    out = OUTPUT_DIR / 'fig8.png'
+    # Save
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUTPUT_DIR / 'fig9.png'
     fig.savefig(out, bbox_inches='tight')
-    fig.savefig(str(out).replace('.png', '.pdf'), bbox_inches='tight')
-    print(f"Saved: {out}")
+    fig.savefig(out.with_suffix('.pdf'), bbox_inches='tight')
+    print(f"Saved: {out.relative_to(BASE_DIR)}, {out.with_suffix('.pdf').relative_to(BASE_DIR)}")
     plt.close()
 
 

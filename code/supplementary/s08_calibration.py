@@ -1,31 +1,21 @@
 """
-s08_calibration.py — ER known-threshold exam for the estimator (Supplementary S8)
-=================================================================================
-Calibrates the susceptibility-peak f_c estimator against directed
-Erdos-Renyi graphs, where the exact answer is known analytically. Independent
-edge dilution of a directed ER graph yields another ER graph with mean degree
-c' = (1 - f) c, so the strongly connected giant component vanishes exactly at
-f_c = 1 - 1/c. Large-N points test instrument accuracy; small-N points
-(matching the empirical L2 and L3 regimes) reproduce the spurious tail peak
-of the unrestricted estimator and show that the peak-validity restriction
-recovers the true threshold. The reading of the manuscript's theoretical
-benchmark formula on each ER graph is also reported as-is.
+s08_calibration.py  Calibration of the order-parameter restriction on directed ER graphs (Table S7)
+==================================================================================================
+Tests the susceptibility-peak threshold estimator on directed Erdos-Renyi
+graphs, whose exact threshold is known. Independent edge dilution of a
+directed ER graph with mean degree c yields another ER graph with mean degree
+(1 - f) c, so the strongly connected giant component vanishes at f_c = 1 - 1/c.
+Large graphs test the accuracy of the estimator, and small graphs at the size
+and density of the L2 and L3 networks reproduce the spurious tail maximum of
+the unrestricted estimator and its removal by the restriction.
 
-Four calibration settings (n, c, realisations):
-    (1000, 3.0, 5), (1000, 5.0, 5), (57, 6.0, 10)   [original three points]
-    (130, 2.3, 10)                                   [L2-like small-sparse point]
-The two blocks below use separate random-number streams so that each block
-reproduces the corresponding production run bit-for-bit.
+Input  none (synthetic graphs only)
+Output  results/tableS7.csv, results/tableS7_realisations.csv
 
-Input:  none (synthetic ER graphs only)
-Output: er_exam_results.csv, er_exam_L2point_results.csv (next to this script)
-        + terminal summaries (mean +/- SD per setting)
+Usage
+  python code/supplementary/s08_calibration.py
 
-Usage:
-    cd code/supplementary
-    python s08_calibration.py
-
-Last modified: 2026-07-21
+Last modified 2026-10-27
 """
 import sys
 from pathlib import Path
@@ -34,25 +24,49 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_SCRIPT_DIR.parent / "pipeline"))
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+RESULTS_DIR = BASE_DIR / "results"
+sys.path.insert(0, str(BASE_DIR / "code" / "pipeline"))
 
 from robustness import (                     # noqa: E402
     multi_trial_edge_removal, find_critical_threshold,
     calculate_molloy_reed_threshold,
 )
 
-PINF_GUARD = 0.05
+PINF_FLOOR = 0.05
+TAIL_F = 0.9          # an unrestricted estimate at f >= 0.9 is a tail maximum
+
+# Calibration settings (n, c, realisations). The two blocks draw their graph
+# seeds from separate random-number streams, each started from
+# default_rng(7), which is how the values of Table S7 were generated.
+BLOCK_1 = [(1000, 3.0, 5), (1000, 5.0, 5), (57, 6.0, 10)]
+BLOCK_2 = [(130, 2.3, 10)]
+
+# Supplementary Table S7, (n, c) to (exact f_c, unrestricted mean, SD,
+# restricted mean, SD), and the tail-maximum rates of the table note
+TABLE_S7 = {
+    (57, 6.0): (0.833, 0.994, 0.010, 0.837, 0.011),
+    (130, 2.3): (0.565, 0.858, 0.207, 0.515, 0.046),
+    (1000, 3.0): (0.667, 0.628, 0.017, 0.616, 0.009),
+    (1000, 5.0): (0.800, 0.771, 0.009, 0.759, 0.009),
+}
+TAIL_RATE = {(57, 6.0): 1.00, (130, 2.3): 0.80}
+# Table S7 prints 0.046 for the restricted SD at n = 130, c = 2.3. The computed
+# value is 0.04550 (0.045 at three decimals), so this entry is checked with a
+# tolerance of 0.0006 instead of 0.0005.
+TOLERANCE = {((130, 2.3), "restricted_sd"): 0.0006}
+# Section S8 text, for the large sparse graphs the restriction lowers the
+# unrestricted estimate by at most about 0.012
+LARGE_GRAPH_SHIFT_MAX = 0.012
 
 
-def guarded_threshold(sim: pd.DataFrame, component: str = "strong",
-                      pinf_min: float = PINF_GUARD):
-    """Peak-validity restriction with an absolute P_inf floor.
+def restricted_threshold(sim: pd.DataFrame, component: str = "strong",
+                         pinf_min: float = PINF_FLOOR):
+    """Susceptibility argmax restricted to rows with P_inf >= pinf_min.
 
-    Restricts the susceptibility argmax to rows where P_inf >= pinf_min.
-    This is the exact restriction variant used in the production calibration
-    runs (absolute floor; for the main empirical pipeline the floor is
-    expressed relative to P_inf(0), see pipeline/robustness.py).
+    The calibration applies the floor as an absolute value of P_inf. For the
+    empirical networks the pipeline expresses it relative to P_inf(0), see
+    find_critical_threshold in pipeline/robustness.py.
     """
     chi_col, p_col = f"Chi_{component}", f"P_inf_{component}"
     ok = sim[sim[p_col] >= pinf_min]
@@ -62,12 +76,8 @@ def guarded_threshold(sim: pd.DataFrame, component: str = "strong",
     return row["f"], row[chi_col]
 
 
-def run_block(settings, record_extras):
-    """Run one exam block with its own random-number stream.
-
-    Each block re-initialises numpy's default_rng(7), preserving the exact
-    graph seeds of the corresponding production run.
-    """
+def run_block(settings):
+    """Run one calibration block with its own random-number stream."""
     rows = []
     rng = np.random.default_rng(7)
     for n, c, reps in settings:
@@ -77,43 +87,67 @@ def run_block(settings, record_extras):
             sim = multi_trial_edge_removal(G, method="error", n_steps=50,
                                            n_trials=100, seed=42 + rep)
             fc_raw, chi_raw = find_critical_threshold(sim, "strong")
-            fc_g, _ = guarded_threshold(sim, "strong")
-            row = {"n": n, "c": c, "rep": rep, "fc_true": 1 - 1 / c,
-                   "fc_raw": fc_raw, "fc_guarded": fc_g}
-            if record_extras:
-                row["chi_raw"] = chi_raw
-                row["fc_eq1_paper"] = calculate_molloy_reed_threshold(G)
-            rows.append(row)
+            fc_res, _ = restricted_threshold(sim, "strong")
+            rows.append({"n": n, "c": c, "rep": rep, "fc_exact": 1 - 1 / c,
+                         "fc_unrestricted": fc_raw, "fc_restricted": fc_res,
+                         "chi_max_unrestricted": chi_raw,
+                         # directed MR benchmark (Eq. 1 of the main text) on the same graph
+                         "fc_dMR": calculate_molloy_reed_threshold(G)})
     return pd.DataFrame(rows)
 
 
 def main():
-    # Block 1: the original three calibration points
-    settings = [(1000, 3.0, 5), (1000, 5.0, 5), (57, 6.0, 10)]
-    df = run_block(settings, record_extras=True)
-    df = df[["n", "c", "rep", "fc_true", "fc_raw", "fc_guarded",
-             "chi_raw", "fc_eq1_paper"]]
-    df.to_csv(_SCRIPT_DIR / "er_exam_results.csv", index=False)
-    print("\n=== ER exam results (mean +/- SD across realisations) ===")
-    g = df.groupby(["n", "c"]).agg(
-        fc_true=("fc_true", "first"),
-        fc_raw_mean=("fc_raw", "mean"), fc_raw_sd=("fc_raw", "std"),
-        fc_guard_mean=("fc_guarded", "mean"), fc_guard_sd=("fc_guarded", "std"),
-        fc_eq1=("fc_eq1_paper", "mean"),
-        tail_rate=("fc_raw", lambda s: (s >= 0.9).mean()),
-    ).round(3)
-    print(g.to_string())
+    df = pd.concat([run_block(BLOCK_1), run_block(BLOCK_2)], ignore_index=True)
+    summary = df.groupby(["n", "c"]).agg(
+        realisations=("rep", "size"),
+        fc_exact=("fc_exact", "first"),
+        unrestricted_mean=("fc_unrestricted", "mean"),
+        unrestricted_sd=("fc_unrestricted", "std"),
+        restricted_mean=("fc_restricted", "mean"),
+        restricted_sd=("fc_restricted", "std"),
+        tail_rate=("fc_unrestricted", lambda s: (s >= TAIL_F).mean()),
+        fc_dMR_mean=("fc_dMR", "mean"),
+    ).reset_index()
 
-    # Block 2: the L2-like small-sparse point (separate random stream)
-    df2 = run_block([(130, 2.3, 10)], record_extras=False)
-    df2.to_csv(_SCRIPT_DIR / "er_exam_L2point_results.csv", index=False)
-    print("\n=== L2-like point (n=130, c=2.3) ===")
-    g2 = df2.groupby(["n", "c"]).agg(
-        fc_true=("fc_true", "first"),
-        raw_mean=("fc_raw", "mean"), raw_sd=("fc_raw", "std"),
-        g_mean=("fc_guarded", "mean"), g_sd=("fc_guarded", "std"),
-        tail=("fc_raw", lambda s: (s >= 0.9).mean()))
-    print(g2.round(4).to_string())
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(RESULTS_DIR / "tableS7_realisations.csv", index=False)
+    summary.to_csv(RESULTS_DIR / "tableS7.csv", index=False)
+    print("Table S7  Estimator calibration on directed ER graphs (mean and SD over realisations)")
+    print(summary.round(3).to_string(index=False))
+    print("Saved results/tableS7.csv, results/tableS7_realisations.csv\n")
+
+    print("Acceptance check against Supplementary Table S7 and Section S8")
+    failed = False
+    by = summary.set_index(["n", "c"])
+    names = ["exact f_c", "unrestricted mean", "unrestricted SD",
+             "restricted mean", "restricted SD"]
+    cols = ["fc_exact", "unrestricted_mean", "unrestricted_sd",
+            "restricted_mean", "restricted_sd"]
+    for key, expected in TABLE_S7.items():
+        for name, col, exp in zip(names, cols, expected):
+            got = by.loc[key, col]
+            tol = TOLERANCE.get((key, col), 0.0005)
+            ok = abs(got - exp) <= tol
+            failed |= not ok
+            note = f" (tolerance {tol})" if tol != 0.0005 else ""
+            print(f"  n = {key[0]:<5} c = {key[1]:<4} {name:<18} {got:.5f} vs {exp:.3f}  "
+                  f"{'PASS' if ok else 'FAIL'}{note}")
+    for key, exp in TAIL_RATE.items():
+        got = by.loc[key, "tail_rate"]
+        ok = abs(got - exp) <= 0.005
+        failed |= not ok
+        print(f"  n = {key[0]:<5} c = {key[1]:<4} {'tail maximum rate':<18} {got:.2f} vs {exp:.2f}  "
+              f"{'PASS' if ok else 'FAIL'}")
+    for key in [(1000, 3.0), (1000, 5.0)]:
+        shift = by.loc[key, "unrestricted_mean"] - by.loc[key, "restricted_mean"]
+        ok = 0 <= shift <= LARGE_GRAPH_SHIFT_MAX + 0.0005
+        failed |= not ok
+        print(f"  n = {key[0]:<5} c = {key[1]:<4} {'restriction shift':<18} {shift:.4f} vs at most about "
+              f"{LARGE_GRAPH_SHIFT_MAX:.3f}  {'PASS' if ok else 'FAIL'}")
+    if failed:
+        print("GATE FAILED  computed values differ from Supplementary Table S7")
+        sys.exit(1)
+    print("GATE PASS  all values match Supplementary Table S7")
 
 
 if __name__ == "__main__":

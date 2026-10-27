@@ -1,23 +1,18 @@
 """
-s13_fc_r_integral.py — Threshold vs robustness integral consistency (Supplementary S13)
-=======================================================================================
-Summarises, per spatial scale, the correlation between the critical threshold
-f_c and the robustness integral R (Error and Attack sides) from the revised
-100-trial protocol data, and plots the L2 scatter. Pure post-processing: no
-simulation is re-run.
+s13_fc_r_integral.py  Pseudo-critical threshold versus robustness integral (Fig. S9)
+===================================================================================
+Correlates, per scale and for random failure and targeted attack, the
+pseudo-critical threshold f_c with the robustness integral R over the networks
+with SCGC ratio >= 0.3 and a positive threshold on the respective side, and
+plots the L2 scatter. No simulation is run.
 
-Input:  ../../data/match_summary_mc100_guarded.csv (read-only)
-Output: fc_R_table.csv, fig_fc_vs_R.png/.pdf (written next to this script)
+Input  data/match_summary_mc100_guarded.csv
+Output  figures/figS9.pdf, figures/figS9.png, results/figS9_fc_R_table.csv
 
-Acceptance gate: reproduces the recorded L2 Pearson correlations
-r(fc, R) ~ 0.79 (Error) / 0.85 (Attack) within half a final digit;
-exits on mismatch.
+Usage
+  python code/supplementary/s13_fc_r_integral.py
 
-Usage:
-    cd code/supplementary
-    python s13_fc_r_integral.py
-
-Last modified: 2026-07-21
+Last modified 2026-10-27
 """
 
 import sys
@@ -26,8 +21,17 @@ from pathlib import Path
 import pandas as pd
 from scipy import stats
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
-CSV = _SCRIPT_DIR.parent.parent / "data" / "match_summary_mc100_guarded.csv"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+FIG_DIR = BASE_DIR / "figures"
+RESULTS_DIR = BASE_DIR / "results"
+# Published analysis (100 Monte Carlo trials at all scales, restricted threshold estimator)
+CSV = BASE_DIR / "data" / "match_summary_mc100_guarded.csv"
+
+# Supplementary Section S13, Pearson r(f_c, R) per (scale, side), and the L2 sample sizes
+GATE_R = {("L1", "Error"): 0.765, ("L1", "Attack"): 0.826,
+          ("L2", "Error"): 0.793, ("L2", "Attack"): 0.855,
+          ("L3", "Error"): 0.681, ("L3", "Attack"): 0.756}
+GATE_N = {("L2", "Error"): 4330, ("L2", "Attack"): 4368}
 
 
 def main():
@@ -43,24 +47,31 @@ def main():
             rows.append({"Scale": sc, "Side": side, "n": len(v),
                          "pearson_r": round(pear, 3), "spearman_rho": round(spear, 3),
                          "fc_mean": round(v[fc_col].mean(), 3),
-                         "R_mean": round(v[r_col].mean(), 3)})
+                         "R_mean": round(v[r_col].mean(), 3),
+                         "pearson_r_full": pear})
     t = pd.DataFrame(rows)
-    t.to_csv(_SCRIPT_DIR / "fc_R_table.csv", index=False)
-    print(t.to_string(index=False))
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    t.drop(columns="pearson_r_full").to_csv(RESULTS_DIR / "figS9_fc_R_table.csv", index=False)
+    print(t.drop(columns="pearson_r_full").to_string(index=False))
+    print("Saved results/figS9_fc_R_table.csv\n")
 
-    # Gate: L2 reproduces the recorded ~0.79 / ~0.85
-    l2e = t[(t.Scale == "L2") & (t.Side == "Error")].pearson_r.iloc[0]
-    l2a = t[(t.Scale == "L2") & (t.Side == "Attack")].pearson_r.iloc[0]
-    # The recorded values are 2-decimal (~0.79 / ~0.85). Gate = |measured -
-    # recorded| <= 0.006 (half a final digit 0.005 + floating-point margin;
-    # the measured 0.855 differs from the recorded 0.85 by exactly half a digit)
-    okE, okA = abs(l2e - 0.79) <= 0.006, abs(l2a - 0.85) <= 0.006
-    print(f"\nGATE - L2 r(fc,R): Error {l2e:.3f} (expected ~0.79) -> "
-          f"{'PASS' if okE else 'FAIL'} | Attack {l2a:.3f} (expected ~0.85) -> "
-          f"{'PASS' if okA else 'FAIL'}")
-    if not (okE and okA):
-        print("GATE FAILED - stopping.")
+    # Acceptance check against Supplementary Section S13
+    by = t.set_index(["Scale", "Side"])
+    failed = False
+    for key, exp in GATE_R.items():
+        got = by.loc[key, "pearson_r_full"]
+        ok = abs(got - exp) <= 0.0005
+        failed |= not ok
+        print(f"  r(f_c, R) {key[0]} {key[1]:<6} {got:.4f} vs {exp:.3f}  {'PASS' if ok else 'FAIL'}")
+    for key, exp in GATE_N.items():
+        got = by.loc[key, "n"]
+        ok = got == exp
+        failed |= not ok
+        print(f"  N         {key[0]} {key[1]:<6} {got} vs {exp}  {'PASS' if ok else 'FAIL'}")
+    if failed:
+        print("GATE FAILED  computed values differ from Supplementary Section S13")
         sys.exit(1)
+    print("GATE PASS  all values match Supplementary Section S13\n")
 
     # L2 scatter
     import matplotlib
@@ -78,15 +89,16 @@ def main():
         v = d[d[fc_col] > 0].dropna(subset=[fc_col, r_col])
         ax.scatter(v[fc_col], v[r_col], s=3, alpha=0.15, color=col)
         r = float(v[fc_col].corr(v[r_col]))
-        ax.set_xlabel(f"$f_c$ ({side})")
-        ax.set_ylabel(f"$R$ ({side})")
+        ax.set_xlabel(rf"$f_{{c,\mathrm{{L2}}}}^{{\mathrm{{{side}}}}}$")
+        ax.set_ylabel(rf"$R^{{\mathrm{{{side}}}}}$")
         ax.set_title(f"{side}: r = {r:.3f} ($N$ = {len(v):,})")
-    fig.suptitle("Threshold $f_c$ vs robustness integral $R$ "
-                 "(L2, 100-trial protocol)", y=1.02)
+    fig.suptitle(r"Threshold $f_{c,\mathrm{L2}}$ vs robustness integral $R$ "
+                 "(100-trial protocol)", y=1.02)
     fig.tight_layout()
-    fig.savefig(_SCRIPT_DIR / "fig_fc_vs_R.png", dpi=150, bbox_inches="tight")
-    fig.savefig(_SCRIPT_DIR / "fig_fc_vs_R.pdf", bbox_inches="tight")
-    print("Figure saved: fig_fc_vs_R.png/.pdf")
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIG_DIR / "figS9.png", dpi=150, bbox_inches="tight")
+    fig.savefig(FIG_DIR / "figS9.pdf", bbox_inches="tight")
+    print("Saved figures/figS9.pdf, figures/figS9.png")
 
 
 if __name__ == "__main__":

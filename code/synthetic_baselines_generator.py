@@ -1,30 +1,24 @@
 """
-synthetic_baselines_generator.py — Calibrated synthetic baselines, revised protocol
-===================================================================================
-Generates the four synthetic model families (ER, BA, WS, RGG) calibrated to
-the empirical match-level L2 statistics (N, mean degree, reciprocity via
-mixed edge orientation), regenerates the exact graphs of the originally
-submitted analysis from the same seeds, and evaluates them under the revised
-percolation protocol (Error: 100 Monte Carlo trials + peak-validity
-restriction; Attack: single deterministic removal + restriction).
+synthetic_baselines_generator.py  Calibrated synthetic reference networks (Section 3.4, Fig. 7)
+==============================================================================================
+Generates the four synthetic model families (ER, BA, WS, RGG, 100 realisations
+each) calibrated to the empirical L2 networks (mean number of nodes, mean
+degree, and reciprocity through mixed edge orientation), and evaluates them
+with the percolation protocol of the article (random failure with 100 Monte
+Carlo trials, targeted attack as a single deterministic removal, both with the
+restricted threshold estimator). The regenerated results are compared with the
+shipped file data/synthetic_mc100_guarded.csv and the script exits with status
+1 on any difference. A model-level summary is printed at the end.
 
-Two acceptance gates guard the regeneration:
-  gate A: regenerated graphs match the archived node and edge counts
-  gate B: the original submission protocol (5 trials, unrestricted) run on
-          the regenerated graphs reproduces the archived thresholds
+Input  data/match_summary_mc100_guarded.csv (calibration targets)
+       data/synthetic_mc100_guarded.csv (shipped results, for the comparison)
+Output  results/synthetic_mc100_guarded.csv, results/synthetic_summary_by_model.csv
 
-Input:  ../data/match_summary.csv (calibration targets, read-only)
-        ../data/synthetic_baselines.csv (archived original-protocol results,
-        read-only)
-Output: synthetic_mc100_guarded.csv, summary_by_model.csv
-        (written next to this script; shipped copies live in ../data/)
+Usage
+  python code/synthetic_baselines_generator.py --test        # 5 realisations per model
+  python code/synthetic_baselines_generator.py --workers 8   # full run, 100 per model
 
-Usage:
-    cd code
-    python synthetic_baselines_generator.py --test      # 5 realisations/model
-    python synthetic_baselines_generator.py --workers 8 # full run (100 each)
-
-Last modified: 2026-07-21
+Last modified 2026-10-27
 """
 
 import argparse
@@ -49,25 +43,22 @@ from robustness import (                                  # noqa: E402
     calculate_molloy_reed_threshold,
 )
 
-MATCH_SUMMARY = REPO_ROOT / "data" / "match_summary.csv"
-SYN_ARCHIVE = REPO_ROOT / "data" / "synthetic_baselines.csv"
+MATCH_RESULTS = REPO_ROOT / "data" / "match_summary_mc100_guarded.csv"
+SHIPPED = REPO_ROOT / "data" / "synthetic_mc100_guarded.csv"
+RESULTS_DIR = REPO_ROOT / "results"
 
 MODEL_TYPES = ["ER", "BA", "WS", "RGG"]
 N_REALISATIONS = 100
 SEED_BASE = 42
 N_TRIALS, SEED, N_STEPS = 100, 42, 50
 PINF_RESTRICTION_FRACTION = 0.05
-ATOL = 5e-5   # archive stores 4 decimal places
-
-# Empirical L2 reference under the revised protocol (n = 4,330)
-EMP_REF = {"fcE": 0.604, "fcA": 0.420, "RAI": 0.304}
 
 
 # ============================================================================
-# Graph generation (identical to the originally submitted generator)
+# Graph generation
 # ============================================================================
 
-def load_empirical_l2_targets(match_csv_path: Path = MATCH_SUMMARY) -> Dict[str, float]:
+def load_empirical_l2_targets(match_csv_path: Path = MATCH_RESULTS) -> Dict[str, float]:
     """Calibrate synthetic models from empirical match-level L2 means.
 
     Uses mixed orientation to match empirical reciprocity:
@@ -83,7 +74,7 @@ def load_empirical_l2_targets(match_csv_path: Path = MATCH_SUMMARY) -> Dict[str,
     df = pd.read_csv(match_csv_path)
     l2 = df[df["Scale"] == "L2"].dropna(subset=["Nodes", "AvgDegree"])
     if l2.empty:
-        raise ValueError("No L2 match-level rows found in match_summary.csv")
+        raise ValueError("No L2 match-level rows found")
 
     n_mean = int(round(float(l2["Nodes"].mean())))
     k_total = float(l2["AvgDegree"].mean())  # directed: E/N
@@ -170,48 +161,28 @@ def generate_synthetic_graph(model_type: str, params: Dict[str, float], seed: in
 
 
 # ============================================================================
-# Revised-protocol evaluation
+# Percolation evaluation
 # ============================================================================
 
-def guarded_fc(sim, component):
-    """Restricted threshold (relative 5% floor), as in the revised protocol."""
+def restricted_fc(sim, component):
+    """Restricted threshold estimator (peak search where P_inf >= 5% of P_inf(0))."""
     return find_critical_threshold(sim, component,
                                    min_pinf_fraction=PINF_RESTRICTION_FRACTION)
 
 
-def theory_corrected(G):
-    kin, kout = dict(G.in_degree()), dict(G.out_degree())
-    n = G.number_of_nodes()
-    mu = sum(kin.values()) / n
-    mu11 = sum(kin[v] * kout[v] for v in G) / n
-    return (1.0 - mu / mu11) if (mu > 0 and mu11 > mu) else np.nan
-
-
 def process(task):
-    model, i, params, arch = task
+    model, i, params = task
     out = {"Model": model, "Realisation": i}
     try:
         G = nx.DiGraph(generate_synthetic_graph(model, params, SEED_BASE + i))
         out["Nodes"], out["Edges"] = G.number_of_nodes(), G.number_of_edges()
-        out["gateA"] = (out["Nodes"] == arch["Nodes"] and out["Edges"] == arch["Edges"])
-
-        # Gate B: original submission protocol (5 trials, unrestricted)
-        # reproduces the archived thresholds
-        sim_e5 = multi_trial_edge_removal(G, method="error", n_steps=N_STEPS,
-                                          n_trials=5, seed=SEED_BASE)
-        fc_e5, _ = find_critical_threshold(sim_e5, "strong")
-        sim_a = edge_removal_simulation(G, method="attack", n_steps=N_STEPS)
-        fc_a_raw, _ = find_critical_threshold(sim_a, "strong")
-        out["gateB"] = (abs(fc_e5 - arch["fc_Error_Strong"]) <= ATOL
-                        and abs(fc_a_raw - arch["fc_Attack_Strong"]) <= ATOL)
-
-        # Production: Error 100 trials + restriction; Attack single run + restriction
         sim_e = multi_trial_edge_removal(G, method="error", n_steps=N_STEPS,
                                          n_trials=N_TRIALS, seed=SEED)
-        fcE, chiE = guarded_fc(sim_e, "strong")
-        fcA, chiA = guarded_fc(sim_a, "strong")
+        sim_a = edge_removal_simulation(G, method="attack", n_steps=N_STEPS)
+        fcE, chiE = restricted_fc(sim_e, "strong")
+        fcA, chiA = restricted_fc(sim_a, "strong")
         fcE_raw, _ = find_critical_threshold(sim_e, "strong")
-
+        fcA_raw, _ = find_critical_threshold(sim_a, "strong")
         out.update({
             "AvgDegree": round(out["Edges"] / max(out["Nodes"], 1), 4),
             "Reciprocity": round(float(nx.reciprocity(G)), 4),
@@ -221,34 +192,28 @@ def process(task):
             "R_Error": round(calculate_robustness_integral(sim_e, "strong"), 4),
             "fcA_guarded": fcA, "ChiA": chiA,
             "R_Attack": round(calculate_robustness_integral(sim_a, "strong"), 4),
-            "fcE_raw": fcE_raw, "fcA_raw": fc_a_raw,
-            "theory_corrected": theory_corrected(G),
-            "pc_old_eq1": float(calculate_molloy_reed_threshold(G)),
+            "fcE_raw": fcE_raw, "fcA_raw": fcA_raw,
+            "pc_Theory": float(calculate_molloy_reed_threshold(G)),
             "RAI": (fcE - fcA) / fcE if (fcE and fcE > 0 and not np.isnan(fcA)) else np.nan,
         })
         out["error"] = ""
     except Exception as e:  # noqa: BLE001
         out["error"] = f"{type(e).__name__}: {e}"
-        out.setdefault("gateA", False)
-        out.setdefault("gateB", False)
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--test", action="store_true")
+    ap.add_argument("--test", action="store_true", help="5 realisations per model")
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
 
     params = load_empirical_l2_targets()
     print(f"Calibration: N={params['N_MEAN']}, k={params['K_TOTAL']:.3f}, "
-          f"recip={params['RECIPROCITY']:.3f}")
-    archive = pd.read_csv(SYN_ARCHIVE).set_index(["Model", "Realisation"])
+          f"reciprocity={params['RECIPROCITY']:.3f}")
     n_real = 5 if args.test else N_REALISATIONS
-    tasks = [(m, i, params, archive.loc[(m, i)].to_dict())
-             for m in MODEL_TYPES for i in range(n_real)]
-    print(f"Processing {len(tasks)} realisations "
-          f"(gate A + gate B + revised protocol, Error {N_TRIALS} trials)")
+    tasks = [(m, i, params) for m in MODEL_TYPES for i in range(n_real)]
+    print(f"Processing {len(tasks)} realisations (random failure with {N_TRIALS} trials)")
 
     rows, t0 = [], time.time()
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
@@ -261,55 +226,37 @@ def main():
             if k % 50 == 0 or k == len(tasks):
                 print(f"  {k}/{len(tasks)} ({time.time()-t0:.0f}s)")
 
-    df = pd.DataFrame(rows).sort_values(["Model", "Realisation"])
-    nA, nB = int(df.gateA.sum()), int(df.gateB.sum())
-    print(f"\nGate A (regenerated graphs bit-identical): {nA}/{len(df)}")
-    print(f"Gate B (original protocol reproduces archived thresholds): {nB}/{len(df)}")
-    df.to_csv(_SCRIPT_DIR / "synthetic_mc100_guarded.csv", index=False)
-    if nA < len(df) or nB < len(df):
-        print("GATE FAILED - summary below is for debugging only, do not cite.")
-        sys.exit(1)
+    df = pd.DataFrame(rows).sort_values(["Model", "Realisation"]).reset_index(drop=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(RESULTS_DIR / "synthetic_mc100_guarded.csv", index=False)
 
-    # Model-level summary: original vs revised protocol. RAI uses method A
-    # (ratio of means) plus the manuscript's filter (degenerate realisations
-    # with fcE = 0 excluded); method B (mean of ratios) is a reference column.
-    arch = pd.read_csv(SYN_ARCHIVE)
-    print("\nGate C - method A x manuscript filter reproduces the originally "
-          "submitted RAI values (ER 0.18 / BA 0.32 / RGG -0.08)")
-    summ = []
+    # Comparison with the shipped results
+    shipped = pd.read_csv(SHIPPED)
+    shipped = shipped[shipped.Realisation < n_real].sort_values(["Model", "Realisation"]).reset_index(drop=True)
+    cols = [c for c in shipped.columns if c not in ("Model", "Realisation", "error")]
+    mismatch = []
+    for c in cols:
+        a, b = df[c].astype(float), shipped[c].astype(float)
+        same = (a.isna() & b.isna()) | ((a - b).abs() <= 1e-9)
+        if not same.all():
+            mismatch.append(f"{c} ({int((~same).sum())} rows)")
+
+    # Model-level summary, realisations with a positive random-failure threshold
+    summary = []
     for m in MODEL_TYPES:
         d = df[(df.Model == m) & (df.fcE_guarded > 0)]
-        a = arch[(arch.Model == m) & (arch.fc_Error_Strong > 0)].head(n_real * 2)
-        a = a[a.Realisation < n_real]
-        fcE_o, fcA_o = a.fc_Error_Strong.mean(), a.fc_Attack_Strong.mean()
-        rai_old_A = (fcE_o - fcA_o) / fcE_o
-        fcE_n, fcA_n = d.fcE_guarded.mean(), d.fcA_guarded.mean()
-        rai_new_A = (fcE_n - fcA_n) / fcE_n
-        summ.append({
-            "Model": m, "n_new": len(d), "n_old": len(a),
-            "fcE_old5": round(fcE_o, 3), "fcE_new": round(fcE_n, 3),
-            "fcA_old": round(fcA_o, 3), "fcA_new": round(fcA_n, 3),
-            "RAI_old_A": round(rai_old_A, 3), "RAI_new_A": round(rai_new_A, 3),
-            "RAI_new_B": round(d.RAI.mean(), 3),
-            "theory_corr": round(d.theory_corrected.mean(), 3),
-            "bias_new": round((d.theory_corrected - d.fcE_guarded).mean(), 3),
-        })
-    summary = pd.DataFrame(summ)
-    summary.to_csv(_SCRIPT_DIR / "summary_by_model.csv", index=False)
-    pub = {"ER": 0.18, "BA": 0.32, "RGG": -0.08}
-    for r in summary.itertuples():
-        if r.Model in pub:
-            ok = abs(r.RAI_old_A - pub[r.Model]) < 0.015
-            print(f"  {r.Model}: RAI_old_A={r.RAI_old_A:+.3f} vs published {pub[r.Model]:+.2f}"
-                  f" -> {'PASS' if ok else 'FAIL'}")
-    print("\nModel-level old-vs-new comparison (summary_by_model.csv):")
+        fcE, fcA = d.fcE_guarded.mean(), d.fcA_guarded.mean()
+        summary.append({"Model": m, "n": len(d), "fcE": round(fcE, 3), "fcA": round(fcA, 3),
+                        "RAI": round((fcE - fcA) / fcE, 3)})
+    summary = pd.DataFrame(summary)
+    summary.to_csv(RESULTS_DIR / "synthetic_summary_by_model.csv", index=False)
+    print("\nModel-level summary (realisations with f_c Error > 0):")
     print(summary.to_string(index=False))
-    emp_rai_A = (EMP_REF["fcE"] - EMP_REF["fcA"]) / EMP_REF["fcE"]
-    print(f"\nEmpirical L2 reference (revised protocol): fcE={EMP_REF['fcE']}, "
-          f"fcA={EMP_REF['fcA']}, RAI_A={emp_rai_A:.3f}")
-    rai_dist = {r.Model: abs(r.RAI_new_A - emp_rai_A) for r in summary.itertuples()}
-    print("|RAI_model - RAI_soccer| (method A, revised protocol):",
-          {k: round(v, 3) for k, v in sorted(rai_dist.items(), key=lambda x: x[1])})
+
+    if mismatch:
+        print("\nCOMPARISON FAILED  differs from data/synthetic_mc100_guarded.csv in", ", ".join(mismatch))
+        sys.exit(1)
+    print(f"\nCOMPARISON PASSED  all {len(df)} regenerated realisations equal the shipped results")
 
 
 if __name__ == "__main__":

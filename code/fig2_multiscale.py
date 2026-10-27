@@ -1,31 +1,24 @@
 """
-fig_multiscale.py — Multi-scale passing network visualisation (Fig. 1)
-=====================================================================
-Generates a 4-panel figure showing a single match (Manchester City vs
-Burnley, EPL 2023/24 Matchday 1) at four spatial coarse-graining scales:
-  (a) L0  24x16 = 384 zones
-  (b) L1  12x8  = 96  zones
-  (c) L2  6x4   = 24  zones
-  (d) L3  3x2   = 6   zones
+fig2_multiscale.py  Pitch-player passing networks at four spatial resolutions (Fig. 2)
+====================================================================================
+Builds the directed pitch-player passing network of Manchester City against
+Burnley (2023/24 EPL Matchday 1) at the four resolutions L0 to L3 and draws
+them on a StatsBomb pitch. Nodes are coloured by positional role and sized by
+total degree; arrows give pass direction. Needs the raw StatsBomb event data.
 
-Nodes are coloured by position (Goalkeeper=gold, Defender=navy,
-Midfielder=steel blue, Forward=red), sized by degree. Directed edges
-use arc arrows at L2/L3, width proportional to pass count.
+Input  DATA_ROOT/2_281_2023_24/3892755_events.json (StatsBomb event JSON)
+Output  figures/fig2.png, figures/fig2.pdf
 
-Note: This script requires raw StatsBomb event data (JSON format).
+Usage
+  DATA_ROOT=/path/to/statsbomb/datos python code/fig2_multiscale.py
 
-Input:  StatsBomb event JSON (DATA_ROOT / '2_281_2023_24/3892755_events.json')
-Output: figures/fig1_multiscale_directed.png, figures/fig1_multiscale_directed.pdf
-
-Usage:
-  python code/fig_multiscale.py
-
-Last modified: 2026-03-27
+Last modified 2026-10-27
 """
 
 import matplotlib
 matplotlib.use('Agg')
 
+import os
 import sys
 import numpy as np
 import networkx as nx
@@ -35,8 +28,8 @@ from matplotlib.patches import FancyArrowPatch, Rectangle
 from collections import defaultdict
 from pathlib import Path
 
-# ── Path setup ──
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'pipeline'))
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR / 'code' / 'pipeline'))
 
 from data_loader import (
     load_match_events, extract_passes, get_teams_from_events,
@@ -44,15 +37,17 @@ from data_loader import (
 )
 from network_builder import ZonalNetworkBuilder, SCALE_CONFIGS
 
-# ── Config ──
-# User must set this to the root directory of StatsBomb event data
-DATA_ROOT = Path('/path/to/statsbomb/datos')
-MATCH_FILE = DATA_ROOT / '2_281_2023_24/3892755_events.json'
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'figures'
-
+# Root directory of the StatsBomb event data (set the DATA_ROOT environment variable)
+DATA_ROOT = Path(os.environ.get('DATA_ROOT', '/path/to/statsbomb/datos'))
+MATCH_FILE = DATA_ROOT / '2_281_2023_24' / '3892755_events.json'
+OUTPUT_DIR = BASE_DIR / 'figures'
 FIELD_L, FIELD_W = 120.0, 80.0
 
-# ── Global style — Arctic Academic (Times New Roman, deep-blue + rust-red) ──
+# Network sizes printed in Fig. 2 and its caption, (|V|, |E|) with |E| the
+# number of distinct directed edges
+PUBLISHED_SIZES = {'L0': (686, 620), 'L1': (371, 601), 'L2': (158, 522), 'L3': (57, 344)}
+
+# Global style (Times New Roman, deep blue and rust red)
 plt.rcParams.update({
     'font.family': 'serif',
     'font.serif': ['Times New Roman', 'Times', 'DejaVu Serif'],
@@ -72,13 +67,13 @@ plt.rcParams.update({
     'mathtext.bf': 'Times New Roman:bold',
 })
 
-# Arctic Academic color scheme — no green, use blue/red tonal family
+# Positional role colours (blue and red tonal family, amber for goalkeepers)
 POS_COLORS = {
-    'Goalkeeper': '#D4A03C',   # amber gold (warm accent)
-    'Defender':   '#1B4F72',   # deep navy blue (Arctic primary)
-    'Midfield':   '#5B8DB8',   # steel blue (Arctic mid-tone)
-    'Forward':    '#C0392B',   # rust red (Arctic secondary)
-    'Unknown':    '#8B9DAF',   # blue-grey
+    'Goalkeeper': '#D4A03C',   # amber gold
+    'Defender':   '#1B4F72',   # deep navy blue
+    'Midfield':   '#5B8DB8',   # steel blue
+    'Forward':    '#C0392B',   # rust red
+    'Unknown':    '#8B9DAF',   # blue grey
 }
 
 POS_MAP = {
@@ -102,25 +97,27 @@ POS_MAP = {
 SCALE_VIZ = {
     'L0': {
         'node_base': 5,  'node_scale': 50,
-        'edge_alpha_min': 0.04, 'edge_alpha_max': 0.35,
+        'edge_alpha_min': 0.06, 'edge_alpha_max': 0.26,
         'edge_lw_min': 0.1, 'edge_lw_max': 0.5,
         'node_lw': 0.15, 'jitter_frac': 0.38,
-        'show_arrows': False, 'arc_rad': 0.12,
+        'show_arrows': True, 'arc_rad': 0.12,
+        'arrow_mutation': 6,
         'min_weight': 1,
         'zone_fill_alpha': 0.018,
     },
     'L1': {
         'node_base': 8,  'node_scale': 100,
-        'edge_alpha_min': 0.06, 'edge_alpha_max': 0.45,
+        'edge_alpha_min': 0.08, 'edge_alpha_max': 0.34,
         'edge_lw_min': 0.15, 'edge_lw_max': 1.0,
         'node_lw': 0.3, 'jitter_frac': 0.35,
-        'show_arrows': False, 'arc_rad': 0.15,
+        'show_arrows': True, 'arc_rad': 0.15,
+        'arrow_mutation': 8,
         'min_weight': 1,
         'zone_fill_alpha': 0.022,
     },
     'L2': {
         'node_base': 15, 'node_scale': 220,
-        'edge_alpha_min': 0.10, 'edge_alpha_max': 0.65,
+        'edge_alpha_min': 0.08, 'edge_alpha_max': 0.50,
         'edge_lw_min': 0.3, 'edge_lw_max': 2.5,
         'node_lw': 0.5, 'jitter_frac': 0.32,
         'show_arrows': True, 'arc_rad': 0.15,
@@ -130,7 +127,7 @@ SCALE_VIZ = {
     },
     'L3': {
         'node_base': 35, 'node_scale': 400,
-        'edge_alpha_min': 0.10, 'edge_alpha_max': 0.70,
+        'edge_alpha_min': 0.08, 'edge_alpha_max': 0.55,
         'edge_lw_min': 0.4, 'edge_lw_max': 3.5,
         'node_lw': 0.7, 'jitter_frac': 0.35,
         'show_arrows': True, 'arc_rad': 0.15,
@@ -144,7 +141,7 @@ PANEL_LABELS = ['(a)', '(b)', '(c)', '(d)']
 
 
 def get_player_positions(events, team_id):
-    """Extract player position categories from Starting XI and event data."""
+    """Map player id to positional role, from the Starting XI and then from event positions."""
     positions = {}
     for event in events:
         if event.get('type', {}).get('name') == 'Starting XI' and event.get('team', {}).get('id') == team_id:
@@ -163,36 +160,26 @@ def get_player_positions(events, team_id):
 
 
 def draw_pitch(ax):
-    """Draw a simplified football pitch outline."""
-    color = '#888888'  # visible grey pitch lines
-    lw = 0.8
-    ax.plot([0, FIELD_L], [0, 0], color=color, lw=lw)
-    ax.plot([0, FIELD_L], [FIELD_W, FIELD_W], color=color, lw=lw)
-    ax.plot([0, 0], [0, FIELD_W], color=color, lw=lw)
-    ax.plot([FIELD_L, FIELD_L], [0, FIELD_W], color=color, lw=lw)
-    ax.plot([FIELD_L/2, FIELD_L/2], [0, FIELD_W], color=color, lw=lw*0.7, ls='--', alpha=0.5)
-    circle = plt.Circle((FIELD_L/2, FIELD_W/2), 9.15, fill=False, color=color, lw=lw*0.7, alpha=0.5)
-    ax.add_patch(circle)
-    for x0 in [0, FIELD_L - 18]:
-        ax.plot([x0, x0+18], [18, 18], color=color, lw=lw*0.6, alpha=0.45)
-        ax.plot([x0, x0+18], [FIELD_W-18, FIELD_W-18], color=color, lw=lw*0.6, alpha=0.45)
-        xv = 18 if x0 == 0 else FIELD_L - 18
-        ax.plot([xv, xv], [18, FIELD_W-18], color=color, lw=lw*0.6, alpha=0.45)
+    """StatsBomb pitch from mplsoccer (120 x 80 yards, y axis pointing down)."""
+    from mplsoccer import Pitch
+    pitch = Pitch(pitch_type='statsbomb', pitch_color='white',
+                  line_color='#111111', linewidth=1.3, line_zorder=2)
+    pitch.draw(ax=ax)
 
 
 def draw_zone_grid(ax, n_cols, n_rows, alpha=0.12, lw=0.2):
     """Thin grid lines to indicate zones."""
-    color = '#AAAAAA'
+    color = '#7D2433'  # dark red grid lines
     zw = FIELD_L / n_cols
     zh = FIELD_W / n_rows
     for i in range(1, n_cols):
-        ax.plot([i*zw, i*zw], [0, FIELD_W], color=color, lw=lw, ls=':', alpha=alpha)
+        ax.plot([i*zw, i*zw], [0, FIELD_W], color=color, lw=lw, ls='-', alpha=alpha)
     for j in range(1, n_rows):
-        ax.plot([0, FIELD_L], [j*zh, j*zh], color=color, lw=lw, ls=':', alpha=alpha)
+        ax.plot([0, FIELD_L], [j*zh, j*zh], color=color, lw=lw, ls='-', alpha=alpha)
 
 
 def draw_zone_fills(ax, n_cols, n_rows, alpha=0.04, occupied_zones=None):
-    """Checkerboard fills. If occupied_zones given, only fill those."""
+    """Checkerboard fills. If occupied_zones is given, only fill those (not used in Fig. 2)."""
     zw = FIELD_L / n_cols
     zh = FIELD_W / n_rows
     for i in range(n_cols):
@@ -202,13 +189,13 @@ def draw_zone_fills(ax, n_cols, n_rows, alpha=0.04, occupied_zones=None):
                 continue
             if (i + j) % 2 == 0:
                 rect = Rectangle((i * zw, j * zh), zw, zh,
-                                  facecolor='#000000', alpha=alpha,
+                                  facecolor='#1B4F72', alpha=alpha,
                                   edgecolor='none', zorder=0)
                 ax.add_patch(rect)
 
 
 def compute_node_positions(G, n_cols, n_rows, jitter_frac=0.35):
-    """Compute node positions within their assigned zones with jitter."""
+    """Place each node at its zone centre, with small offsets for nodes sharing a zone."""
     builder = ZonalNetworkBuilder()
     zw = FIELD_L / n_cols
     zh = FIELD_W / n_rows
@@ -252,7 +239,7 @@ def compute_node_positions(G, n_cols, n_rows, jitter_frac=0.35):
 
 
 def aggregate_directed_edges(G_multi):
-    """Aggregate multi-edges into weighted directed edges."""
+    """Collapse the pass multigraph into distinct directed edges weighted by pass count."""
     edge_weights = defaultdict(int)
     for u, v in G_multi.edges():
         edge_weights[(u, v)] += 1
@@ -260,16 +247,15 @@ def aggregate_directed_edges(G_multi):
 
 
 def draw_directed_edge(ax, pos_u, pos_v, weight, max_weight, params, is_reciprocal):
-    """Draw a single directed edge with weight-dependent styling."""
     w_norm = weight / max_weight
     alpha = params['edge_alpha_min'] + (params['edge_alpha_max'] - params['edge_alpha_min']) * w_norm
     lw = params['edge_lw_min'] + (params['edge_lw_max'] - params['edge_lw_min']) * w_norm
 
-    # Moderate curve for reciprocal, near-straight otherwise
+    # Moderate curve for reciprocal edges, near straight otherwise
     rad = params['arc_rad'] if is_reciprocal else 0.03
     style = f"arc3,rad={rad}"
 
-    # Blue-grey edge tones (Arctic Academic style)
+    # Blue grey edge tones, darker for heavier edges
     r_val = int(0x3A + (0xA8 - 0x3A) * (1 - w_norm))
     g_val = int(0x50 + (0xB8 - 0x50) * (1 - w_norm))
     b_val = int(0x6A + (0xCC - 0x6A) * (1 - w_norm))
@@ -299,13 +285,13 @@ def draw_directed_edge(ax, pos_u, pos_v, weight, max_weight, params, is_reciproc
 
 
 def plot_directed_network(ax, G_multi, scale, n_cols, n_rows, positions, panel_label):
-    """Draw a complete directed network panel for one scale."""
+    """Draw one directed network panel for one scale."""
     params = SCALE_VIZ[scale]
 
     draw_pitch(ax)
 
-    # Subtle zone grid lines (no checkerboard — cleaner Arctic Academic look)
-    draw_zone_grid(ax, n_cols, n_rows, alpha=0.15, lw=0.3)
+    # Thin solid dark red zone grid, no checkerboard fill
+    draw_zone_grid(ax, n_cols, n_rows, alpha=0.55, lw=0.5)
 
     pos = compute_node_positions(G_multi, n_cols, n_rows, params['jitter_frac'])
 
@@ -348,8 +334,26 @@ def plot_directed_network(ax, G_multi, scale, n_cols, n_rows, positions, panel_l
     n_zones = n_cols * n_rows
     ax.set_title(f'{panel_label}  {scale}  ({n_cols}$\\times${n_rows} = {n_zones} zones)',
                  fontsize=17, fontweight='bold', color='#222222', pad=8, loc='left')
-    ax.text(2, -5, f'|V| = {n_nodes}    |E| = {n_edges_total}',
-            fontsize=14, color='#666666', va='top')
+    ax.text(0.01, -0.04, f'|V| = {n_nodes}    |E| = {n_edges_total}',
+            fontsize=14, color='#666666', va='top', transform=ax.transAxes)
+
+
+def check_published_sizes(networks):
+    """Acceptance check against the network sizes printed in Fig. 2 and its caption."""
+    print("\nCheck  network sizes against the published Fig. 2")
+    ok_all = True
+    for scale in ['L0', 'L1', 'L2', 'L3']:
+        G = networks[scale]
+        got = (G.number_of_nodes(), len(aggregate_directed_edges(G)))
+        exp = PUBLISHED_SIZES[scale]
+        ok = got == exp
+        ok_all &= ok
+        print(f"  {scale}  |V| = {got[0]}, |E| = {got[1]}  vs published "
+              f"|V| = {exp[0]}, |E| = {exp[1]}  {'PASS' if ok else 'FAIL'}")
+    if not ok_all:
+        print("CHECK FAILED, the networks differ from the published figure.")
+        sys.exit(1)
+    print("CHECK ALL PASS")
 
 
 def main():
@@ -379,11 +383,13 @@ def main():
         G = builder.build_network(passes, scale=scale)
         networks[scale] = G
         n_unique_players = len(set(node[0] for node in G.nodes()))
-        print(f"  {scale}: {G.number_of_nodes()} nodes, {G.number_of_edges()} directed edges, "
+        print(f"  {scale}: {G.number_of_nodes()} nodes, {G.number_of_edges()} passes, "
               f"{n_unique_players} unique players")
 
+    check_published_sizes(networks)
+
     print("\nGenerating directed network figure...")
-    fig, axes = plt.subplots(2, 2, figsize=(11, 9.5), facecolor='white')
+    fig, axes = plt.subplots(2, 2, figsize=(11-2, 9.5-2), facecolor='white')
 
     for i, scale in enumerate(['L0', 'L1', 'L2', 'L3']):
         ax = axes[i // 2][i % 2]
@@ -391,29 +397,26 @@ def main():
         n_cols, n_rows = SCALE_CONFIGS[scale]
         plot_directed_network(ax, networks[scale], scale, n_cols, n_rows,
                               positions, PANEL_LABELS[i])
-        ax.set_xlim(-3, FIELD_L + 3)
-        ax.set_ylim(-8, FIELD_W + 3)
-        ax.set_aspect('equal')
-        ax.axis('off')
+        ax.axis('off')  # mplsoccer sets the pitch extent and the inverted y axis
 
     legend_handles = [
         mlines.Line2D([], [], marker='o', color='w', markerfacecolor=POS_COLORS[p],
-                       markersize=10, label=p, linewidth=0,
+                       markersize=10, label=('Midfielder' if p == 'Midfield' else p), linewidth=0,
                        markeredgecolor='white', markeredgewidth=0.5)
         for p in ['Goalkeeper', 'Defender', 'Midfield', 'Forward']
     ]
     fig.legend(handles=legend_handles, loc='lower center',
                fontsize=14, facecolor='white', edgecolor='#CCCCCC',
-               labelcolor='#333333', ncol=4, bbox_to_anchor=(0.5, 0.005),
+               labelcolor='#333333', ncol=4, bbox_to_anchor=(0.5, -0.03),
                framealpha=0.95, columnspacing=2.0, handletextpad=0.5)
 
-    fig.tight_layout(rect=[0, 0.04, 1, 1.0], h_pad=3.5)
+    fig.tight_layout(rect=[0, 0.06, 1, 1.0], h_pad=3.5)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for fmt in ['png', 'pdf']:
-        path = OUTPUT_DIR / f'fig1_multiscale_directed.{fmt}'
+        path = OUTPUT_DIR / f'fig2.{fmt}'
         fig.savefig(path, dpi=300, bbox_inches='tight', facecolor='white')
-        print(f"  Saved: {path}")
+        print(f"  Saved: {path.relative_to(BASE_DIR)}")
     plt.close(fig)
 
     print("\nDone!")

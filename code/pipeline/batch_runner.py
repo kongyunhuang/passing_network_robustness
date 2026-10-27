@@ -1,32 +1,30 @@
 """
-batch_runner.py — Single-match passing network batch analysis orchestrator
-==========================================================================
-Iterates over all league/season matches, using single-match team networks
-as the basic unit:
-1. Parse StatsBomb JSON events -> extract passes
-2. Build multi-scale (L0-L3) position-dependent directed passing networks
-3. Compute structural indicators + bond percolation simulation -> robustness metrics
-4. Export match_summary.csv (match level) and batch_summary.csv (season summary level)
+batch_runner.py  Builds and analyses all single-match team networks (data source of the article)
+================================================================================================
+Iterates over all EPL and La Liga matches of 2022/23 to 2024/25. For each team
+in each match it extracts the completed open-play passes, builds the directed
+pitch-player networks at L0 to L3, computes the structural indicators, and runs
+bond percolation under random failure (100 Monte Carlo trials, seed 42) and
+targeted attack. Thresholds use the restricted estimator, which searches the
+susceptibility maximum only where P_inf(f) >= 0.05 P_inf(0) (see robustness.py).
 
-Revised protocol (July 2026 revision): 100 Monte Carlo trials at all four
-scales (previously 20 for L2, 5 otherwise), and critical thresholds located
-with the peak-validity restriction (susceptibility argmax restricted to
-removal fractions where P_inf >= 5% of its initial value). See
-robustness.py for details.
+Input  DATA_ROOT (StatsBomb event JSON and match info JSON per season folder)
+Output  results/match_summary.csv, results/batch_summary.csv, results/skipped_files.log
 
-Input:  StatsBomb event data directory (DATA_ROOT)
-Output: ../../data/match_summary.csv, ../../data/batch_summary.csv
+The match-level output of a full run corresponds to the shipped file
+data/match_summary_mc100_guarded.csv, which names the threshold columns pc_*
+instead of fc_* (the correspondence is listed in README.md). A full run takes
+several hours.
 
-Usage:
-    # First set the DATA_ROOT variable to point to the StatsBomb data directory
-    cd code/pipeline
-    python batch_runner.py          # Full run
-    python batch_runner.py --test   # Test mode (EPL 22/23 only, first 50 files)
+Usage
+  DATA_ROOT=/path/to/statsbomb/datos python code/pipeline/batch_runner.py
+  DATA_ROOT=/path/to/statsbomb/datos python code/pipeline/batch_runner.py --test
 
-Last modified: 2026-07-21
+Last modified 2026-10-27
 """
 
 import argparse
+import os
 import pandas as pd
 from pathlib import Path
 from collections import defaultdict
@@ -53,14 +51,14 @@ from compute_directed_indicators import compute_directed_indicators
 
 # ============== Configuration ==============
 
-# Users must set this path to the root directory of StatsBomb event data.
-# The directory should contain season subdirectories such as "2_235_2022_23/",
-# each containing *_events.json and 00_info_all_matches_*.json files.
-DATA_ROOT = Path("/path/to/statsbomb/datos")
+# Root directory of the StatsBomb event data (set the DATA_ROOT environment
+# variable). It contains one folder per league and season, such as
+# "2_235_2022_23/", each holding *_events.json and 00_info_all_matches_*.json.
+DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/path/to/statsbomb/datos"))
 
-# Output directory: relative to this file at ../../data/
+# Output directory, results/ at the repository root (../../results/ from this file)
 _SCRIPT_DIR = Path(__file__).parent
-OUTPUT_DIR = _SCRIPT_DIR.parent.parent / "data"
+OUTPUT_DIR = _SCRIPT_DIR.parent.parent / "results"
 MATCH_OUTPUT = OUTPUT_DIR / "match_summary.csv"
 SEASON_OUTPUT = OUTPUT_DIR / "batch_summary.csv"
 SKIPPED_LOG = OUTPUT_DIR / "skipped_files.log"
@@ -80,15 +78,14 @@ SCALES_TO_ANALYZE = ["L0", "L1", "L2", "L3"]
 
 PERCOLATION_STEPS = 50
 
-# Revised protocol: 100 Monte Carlo trials at all four scales
-# (the original submission used 20 trials for L2 and 5 for L0/L1/L3)
+# Monte Carlo trials of random failure at all four scales
 PERCOLATION_TRIALS = 100
 
-# Fixed random seed for the Monte Carlo edge orderings: results are
+# Fixed random seed for the Monte Carlo edge orderings, so results are
 # bit-reproducible across runs (Attack removal is deterministic and unseeded)
 PERCOLATION_SEED = 42
 
-# Peak-validity restriction: the susceptibility argmax is restricted to
+# Order-parameter restriction, the susceptibility argmax is searched only at
 # removal fractions where P_inf >= 5% of its initial value
 PINF_RESTRICTION_FRACTION = 0.05
 
@@ -261,7 +258,7 @@ class BatchAnalyzer:
                     home_team = info["home_team"]
                     away_team = info["away_team"]
                 else:
-                    # Fallback: Starting XI order (verified consistent across 2280 matches)
+                    # Fall back to the Starting XI order (verified consistent across 2280 matches)
                     home_team, away_team = get_teams_from_events(events)
 
                 if not home_team.get("id") or not away_team.get("id"):
@@ -383,8 +380,8 @@ class BatchAnalyzer:
             n_steps=PERCOLATION_STEPS,
         )
 
-        # Revised protocol: peak-validity restriction applied to both Error
-        # and Attack, and to both SCGC (strong) and WGCC (weak)
+        # Order-parameter restriction applied to both Error and Attack, and to
+        # both SCGC (strong) and WGCC (weak)
         fc_error_s, chi_error_s = find_critical_threshold(
             sim_error, "strong", min_pinf_fraction=PINF_RESTRICTION_FRACTION)
         fc_error_w, chi_error_w = find_critical_threshold(

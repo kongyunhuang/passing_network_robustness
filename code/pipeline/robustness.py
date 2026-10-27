@@ -16,14 +16,15 @@ Functionality:
 Input:  NetworkX directed graph (DiGraph or MultiDiGraph)
 Output: Percolation curve DataFrame, critical threshold, robustness integral
 
-Revised protocol (July 2026 revision):
-- Monte Carlo trials: B = 100 at all scales (previously 20 for L2, 5 otherwise)
-- Peak-validity restriction: the susceptibility argmax is restricted to the
-  removal fractions f where P_inf(f) >= 0.05 * P_inf(0), suppressing spurious
-  chi peaks that arise after the giant component has effectively vanished
+Protocol of the article
+- 100 Monte Carlo trials for random removal at all scales; targeted removal is
+  a single deterministic trajectory
+- Restricted threshold estimator. The susceptibility maximum is searched only
+  over removal fractions f where P_inf(f) >= 0.05 P_inf(0), which excludes
+  spurious late maxima after the giant component has vanished
   (pass min_pinf_fraction=0.05 to find_critical_threshold)
-- The restriction applies to both random removal (Error) and targeted
-  removal (Attack), and to both SCGC and WGCC order parameters
+- The restriction applies to random and targeted removal and to both the SCGC
+  and the WGCC order parameter
 
 Usage:
     from pipeline.robustness import (
@@ -34,7 +35,7 @@ Usage:
     fc, chi_max = find_critical_threshold(sim, 'strong', min_pinf_fraction=0.05)
     R = calculate_robustness_integral(sim, 'strong')
 
-Last modified: 2026-07-21
+Last modified: 2026-10-27
 """
 
 import random
@@ -226,14 +227,13 @@ def find_critical_threshold(
     Args:
         sim_results: Percolation simulation result DataFrame
         component_type: 'strong' (SCGC) or 'weak' (WGCC)
-        min_pinf_fraction: Peak-validity restriction (revised protocol).
-            If set (e.g. 0.05), the susceptibility argmax is restricted to
-            rows where P_inf >= min_pinf_fraction * P_inf(f=0), suppressing
-            spurious chi peaks located after the giant component has
-            effectively vanished. If no row satisfies the restriction, or
-            the restricted chi curve is identically zero, returns (nan, 0.0).
-            Default None reproduces the unrestricted (original submission)
-            behaviour.
+        min_pinf_fraction: Restriction of the peak search (0.05 in the article).
+            If set, the susceptibility argmax is restricted to rows where
+            P_inf >= min_pinf_fraction * P_inf(f=0), excluding spurious chi
+            peaks after the giant component has effectively vanished. If no
+            row satisfies the restriction, or the restricted chi curve is
+            identically zero, returns (nan, 0.0). Default None gives the
+            unrestricted estimator (first two settings of Supplementary Table S8).
 
     Returns:
         (f_c, max_chi): Critical threshold and susceptibility peak value

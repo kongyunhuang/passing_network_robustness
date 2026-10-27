@@ -1,23 +1,23 @@
 """
-s07_convergence.py — Monte Carlo trial-count convergence analysis (Supplementary S7)
-====================================================================================
-Re-plots the trial-count convergence diagnostics from the archived convergence
-experiment (200 sampled L2 networks x 10 seeds x trial counts B in
-{5, 10, 20, 40, 80, 160}). Panel (a) shows the per-match dispersion (SD across
-seeds) of the random-removal critical threshold f_c as a function of B; panel
-(b) shows the median absolute deviation of the per-match mean f_c from the
-B = 160 reference. Pure re-plot: no simulation is re-run.
+s07_convergence.py  Monte Carlo trial-count convergence of the threshold (Fig. S3)
+=================================================================================
+Plots the convergence diagnostics of the random-failure threshold from the
+shipped convergence experiment (200 sampled L2 networks, 10 seeds, trial counts
+B in 5, 10, 20, 40, 80 and 160). Panel (a) shows the per-network dispersion
+(SD across seeds) as a function of B, panel (b) the median absolute deviation
+of the per-network mean threshold from the B = 160 reference. No simulation is run.
 
-Input:  ../../data/supplementary/convergence_results.csv (read-only)
-Output: convergence_curve.pdf / .png (written next to this script)
+Input  data/supplementary/convergence_results.csv
+Output  figures/figS3.pdf, figures/figS3.png
 
-Usage:
-    cd code/supplementary
-    python s07_convergence.py
+Usage
+  python code/supplementary/s07_convergence.py
 
-Last modified: 2026-07-21
+Last modified 2026-10-27
 """
+import sys
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -28,12 +28,13 @@ plt.rcParams.update({'font.family': 'serif', 'font.serif': ['Times New Roman', '
                      'font.size': 10, 'pdf.fonttype': 42,
                      'mathtext.fontset': 'cm', 'axes.unicode_minus': False})
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = _SCRIPT_DIR.parent.parent / 'data' / 'supplementary'
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = BASE_DIR / 'data' / 'supplementary'
+FIG_DIR = BASE_DIR / 'figures'
 df = pd.read_csv(DATA_DIR / 'convergence_results.csv')
 GRID_FLOOR = 1 / 49
 
-# Per match and per B: SD and mean across seeds
+# Per network and per B, SD and mean across seeds
 g = df.groupby(['MatchID', 'TeamID', 'n_trials'])['fc'].agg(['std', 'mean']).reset_index()
 Bs = sorted(df.n_trials.unique())
 
@@ -42,17 +43,30 @@ sd_q25 = [g[g.n_trials == b]['std'].quantile(0.25) for b in Bs]
 sd_q75 = [g[g.n_trials == b]['std'].quantile(0.75) for b in Bs]
 sd_p90 = [g[g.n_trials == b]['std'].quantile(0.90) for b in Bs]
 
-# Panel (b): median absolute offset of the per-match mean from the B=160 reference
+# Panel (b), median absolute offset of the per-network mean from the B = 160 reference
 piv = g.pivot_table(index=['MatchID', 'TeamID'], columns='n_trials', values='mean')
 offset = [np.median(np.abs(piv[b] - piv[160])) for b in Bs]
 
-# Acceptance gate: reproduce the SD medians quoted in Supplementary Section S7
-assert abs(sd_median[Bs.index(5)] - 0.083) < 0.001, sd_median
-assert abs(sd_median[Bs.index(20)] - 0.055) < 0.001
-assert abs(sd_median[Bs.index(160)] - 0.027) < 0.001
-assert abs(sd_median[Bs.index(80)] - 0.035) < 0.001
-print('GATE PASS: median SD at B = 5/20/80/160 =',
-      [round(sd_median[Bs.index(b)], 4) for b in (5, 20, 80, 160)])
+# Acceptance check against Supplementary Section S7. Median SD across seeds
+# at B = 5, 20, 80 and 160, and the paired difference of the per-network
+# mean threshold from the B = 160 reference (mean and standard error over
+# the 200 networks) at B = 20 and 80.
+checks = []
+for b, exp in [(5, 0.083), (20, 0.055), (80, 0.035), (160, 0.027)]:
+    checks.append((f'median SD at B = {b}', sd_median[Bs.index(b)], exp))
+for b, exp_mean, exp_se in [(20, -0.016, 0.003), (80, -0.002, 0.001)]:
+    d = piv[b] - piv[160]
+    checks.append((f'paired difference at B = {b}', d.mean(), exp_mean))
+    checks.append((f'paired difference SE at B = {b}', d.std(ddof=1) / np.sqrt(len(d)), exp_se))
+failed = False
+for label, got, exp in checks:
+    ok = abs(got - exp) <= 0.0005
+    failed |= not ok
+    print(f'  {label:<34} {got:+.4f} vs {exp:+.3f}  {"PASS" if ok else "FAIL"}')
+if failed:
+    print('GATE FAILED  computed values differ from Supplementary Section S7')
+    sys.exit(1)
+print(f'GATE PASS  all {len(checks)} values match Supplementary Section S7')
 
 fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6))
 ax = axes[0]
@@ -65,8 +79,8 @@ ax.axhline(GRID_FLOOR, color='#8b1a1a', ls='-.', lw=1,
            label=r'$f$-grid resolution ($1/49\approx0.020$)')
 ax.set_xscale('log'); ax.set_xticks(Bs); ax.set_xticklabels(Bs)
 ax.set_xlabel(r'Monte Carlo trials $B$')
-ax.set_ylabel(r'SD of $f_c^{\mathrm{Error}}$ across 10 seeds')
-ax.set_title(r'(a) Per-match dispersion of $f_c$', fontsize=10.5)
+ax.set_ylabel(r'SD of $f_{c,\mathrm{L2}}^{\mathrm{Error}}$ across 10 seeds')
+ax.set_title(r'(a) Per-match dispersion of $f_{c,\mathrm{L2}}$', fontsize=10.5)
 ax.legend(fontsize=7.5, frameon=True)
 ax.set_ylim(0, 0.145)
 
@@ -75,10 +89,11 @@ ax.plot(Bs, offset, 'o-', color='#2e7d32')
 ax.axhline(GRID_FLOOR, color='#e05555', ls='-.', lw=1)
 ax.set_xscale('log'); ax.set_xticks(Bs); ax.set_xticklabels(Bs)
 ax.set_xlabel(r'Monte Carlo trials $B$')
-ax.set_ylabel(r'median $|\bar{f}_c(B)-\bar{f}_c(160)|$')
+ax.set_ylabel(r'median $|\bar{f}_{c,\mathrm{L2}}(B)-\bar{f}_{c,\mathrm{L2}}(160)|$')
 ax.set_title('(b) Deviation from high-trial reference', fontsize=10.5)
 
 fig.tight_layout()
-fig.savefig(_SCRIPT_DIR / 'convergence_curve.pdf')
-fig.savefig(_SCRIPT_DIR / 'convergence_curve.png', dpi=200)
-print('saved convergence_curve.pdf/.png')
+FIG_DIR.mkdir(parents=True, exist_ok=True)
+fig.savefig(FIG_DIR / 'figS3.pdf')
+fig.savefig(FIG_DIR / 'figS3.png', dpi=200)
+print('Saved figures/figS3.pdf, figures/figS3.png')

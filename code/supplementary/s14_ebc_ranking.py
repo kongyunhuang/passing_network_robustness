@@ -1,34 +1,25 @@
 """
-s14_ebc_ranking.py — Edge betweenness vs degree-based attack (Supplementary S14)
-================================================================================
-Compares the degree-sum attack of the main pipeline against an edge
-betweenness centrality (EBC) attack on the filtered L2 match networks
-(originally submitted analysis: n = 4,343, unrestricted estimator, single
-deterministic removal per strategy). For each network both attacks are run
-with identical percolation machinery (n_steps = 50, susceptibility peak
-estimator) and the resulting thresholds and susceptibility peaks are
-recorded.
+s14_ebc_ranking.py  Edge betweenness versus degree-based targeted removal (Fig. S10)
+===================================================================================
+Compares the degree-based attack of the main pipeline with an attack ordered by
+edge betweenness centrality (EBC) on the 4,343 L2 networks that are valid under
+the first setting of Supplementary Table S8 (20 random-failure trials,
+unrestricted estimator). Both attacks use the same percolation machinery
+(50 removal steps, unrestricted susceptibility-peak estimator, one
+deterministic removal per ranking). The plot mode draws Fig. S10 from the
+shipped results and needs no raw data.
 
-Running the full analysis requires the StatsBomb event data (set the
-DATA_ROOT environment variable or edit DATA_DIR below). The plot-only mode
-reproduces the supplementary three-panel figure from the shipped results CSV
-and needs no raw data.
+Input  data/match_summary.csv and raw event data under DATA_ROOT (full run),
+       data/supplementary/ebc_vs_degree_all_matches.csv (plot mode)
+Output  results/figS10_ebc_vs_degree_all_matches.csv (full run),
+        figures/figS10.pdf, figures/figS10.png (plot mode)
 
-Input:  ../../data/match_summary.csv (read-only; original submission
-        protocol values, used for the L2 filter and the reference column)
-        StatsBomb event JSON files under DATA_ROOT (full run only)
-        ../../data/supplementary/ebc_vs_degree_all_matches.csv (plot mode)
-Output: ebc_vs_degree_all_matches.csv + ebc_vs_degree_summary.png (full run)
-        fig_ebc_summary.pdf/.png (plot-only mode)
-        (all written next to this script)
+Usage
+  python code/supplementary/s14_ebc_ranking.py --plot          # Fig. S10 from shipped file
+  DATA_ROOT=/path/to/statsbomb/datos python code/supplementary/s14_ebc_ranking.py --limit 30
+  DATA_ROOT=/path/to/statsbomb/datos python code/supplementary/s14_ebc_ranking.py
 
-Usage:
-    cd code/supplementary
-    python s14_ebc_ranking.py --limit 30   # adaptation check on 30 networks
-    python s14_ebc_ranking.py              # full run (requires DATA_ROOT)
-    python s14_ebc_ranking.py --plot       # figure from shipped CSV
-
-Last modified: 2026-07-21
+Last modified 2026-10-27
 """
 
 import argparse
@@ -41,9 +32,8 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = _SCRIPT_DIR.parent.parent
-sys.path.insert(0, str(_SCRIPT_DIR.parent / "pipeline"))
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(BASE_DIR / "code" / "pipeline"))
 
 from data_loader import (                    # noqa: E402
     load_match_events, extract_passes, build_substitution_map,
@@ -52,14 +42,17 @@ from data_loader import (                    # noqa: E402
 from robustness import edge_removal_simulation, calculate_metrics_directed  # noqa: E402
 
 # ============================================================================
-# Configuration - aligned with the manuscript's percolation protocol
+# Configuration
 # ============================================================================
-# Users must point this at the StatsBomb event data root directory
-# (or set the DATA_ROOT environment variable).
+# Root directory of the StatsBomb event data (set the DATA_ROOT environment variable)
 DATA_DIR = Path(os.environ.get("DATA_ROOT", "/path/to/statsbomb/datos"))
 
-MATCH_SUMMARY_PATH = REPO_ROOT / "data" / "match_summary.csv"
-SUPP_DATA = REPO_ROOT / "data" / "supplementary"
+# First setting of Supplementary Table S8 (20 trials at L2, unrestricted),
+# used for the L2 validity filter and the reference attack threshold
+MATCH_SUMMARY_PATH = BASE_DIR / "data" / "match_summary.csv"
+SUPP_DATA = BASE_DIR / "data" / "supplementary"
+FIG_DIR = BASE_DIR / "figures"
+RESULTS_DIR = BASE_DIR / "results"
 
 N_STEPS = 50
 PITCH_X, PITCH_Y = 120, 80
@@ -75,14 +68,20 @@ DIR_MAP = {
     ("La Liga", "2024/25"): "11_317_2024_25",
 }
 
+# Supplementary Section S14
+GATE_N = 4343
+GATE_PCT_EBC_LOWER = 74.6         # percent of networks with f_c(EBC) < f_c(degree)
+GATE_MEAN = {"fc_degree": 0.423, "fc_ebc": 0.314}
+GATE_PCT_BELOW_01 = {"fc_ebc": 13.7, "fc_degree": 1.8}   # percent with f_c < 0.1
+
 
 # ============================================================================
-# Network construction - consistent with pipeline/network_builder.py
+# Network construction, consistent with pipeline/network_builder.py
 # ============================================================================
 def build_l2_network(passes):
     """Build the L2 (6x4) directed simple graph from passes.
 
-    Consistent with the manuscript's network construction:
+    Consistent with the network construction of the main text
     - nodes = (player_id, zone_id)
     - directed edge = passer node -> receiver node
     - parallel edges merged (simple directed graph)
@@ -103,15 +102,15 @@ def build_l2_network(passes):
 
 
 # ============================================================================
-# EBC percolation - identical logic to edge_removal_simulation(method='attack');
+# EBC percolation, the same logic as edge_removal_simulation(method='attack');
 # the only difference is the ordering criterion (EBC instead of degree sum)
 # ============================================================================
 def ebc_percolation(G, n_steps=N_STEPS):
     """Run edge betweenness centrality attack percolation.
 
-    Fully aligned with edge_removal_simulation(method='attack'):
+    Aligned with edge_removal_simulation(method='attack')
     1. convert to a simple directed graph
-    2. compute EBC for all edges (once; static strategy)
+    2. compute EBC for all edges (once, static strategy)
     3. sort edges by descending EBC
     4. remove progressively at n_steps sampling points, recording
        P_inf_strong and Chi_strong
@@ -129,7 +128,7 @@ def ebc_percolation(G, n_steps=N_STEPS):
     edges.sort(key=lambda e: ebc.get(e, 0), reverse=True)
     removal_order = edges
 
-    # Sampling points - identical to edge_removal_simulation
+    # Sampling points, identical to edge_removal_simulation
     f_values = np.linspace(0, 1, n_steps)
     target_removals = sorted(set(int(f * E_0) for f in f_values))
 
@@ -160,8 +159,7 @@ def ebc_percolation(G, n_steps=N_STEPS):
 
 
 def find_fc_from_chi(df):
-    """Find f_c as the f value at the Chi_strong peak (unrestricted estimator,
-    matching the originally submitted analysis)."""
+    """Locate f_c at the Chi_strong peak (unrestricted estimator)."""
     if df.empty or 'Chi_strong' not in df.columns:
         return 0.0, 0.0
     idx = df['Chi_strong'].idxmax()
@@ -169,10 +167,10 @@ def find_fc_from_chi(df):
 
 
 # ============================================================================
-# Main: run all matches
+# Full run over all valid L2 networks
 # ============================================================================
 def run_all(limit=None):
-    # Load and filter match_summary (original submission L2 filter)
+    # L2 networks valid under the first setting of Supplementary Table S8
     ms = pd.read_csv(MATCH_SUMMARY_PATH)
     l2 = ms[(ms['Scale'] == 'L2') &
             (ms['SCGC_Ratio'] >= 0.3) &
@@ -206,7 +204,7 @@ def run_all(limit=None):
 
         try:
             events = load_match_events(str(events_path))
-            # Substitution inheritance - identical to the main pipeline
+            # Substitution inheritance, identical to the main pipeline
             sub_map = build_substitution_map(events, team_id=tid)
             passes = extract_passes(events, team_id=tid,
                                     successful_only=True, exclude_set_pieces=True)
@@ -238,7 +236,7 @@ def run_all(limit=None):
                 'chi_degree': chi_deg,
                 'fc_ebc': fc_ebc,
                 'chi_ebc': chi_ebc,
-                'fc_paper': float(row['fc_Attack_Strong']),  # reference value
+                'fc_paper': float(row['fc_Attack_Strong']),  # attack threshold in match_summary.csv
             })
 
             count = len(results)
@@ -259,9 +257,10 @@ def run_all(limit=None):
     print(f"Skipped: {skipped}, Errors: {errors}")
 
     rdf = pd.DataFrame(results)
-    csv_path = _SCRIPT_DIR / "ebc_vs_degree_all_matches.csv"
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = RESULTS_DIR / "figS10_ebc_vs_degree_all_matches.csv"
     rdf.to_csv(csv_path, index=False)
-    print(f"Saved: {csv_path}")
+    print(f"Saved: {csv_path.relative_to(BASE_DIR)}")
 
     return rdf
 
@@ -273,7 +272,7 @@ def print_summary(rdf):
     print(f"{'='*60}")
     print(f"fc_degree:  mean={rdf['fc_degree'].mean():.3f}, std={rdf['fc_degree'].std():.3f}")
     print(f"fc_ebc:     mean={rdf['fc_ebc'].mean():.3f}, std={rdf['fc_ebc'].std():.3f}")
-    print(f"fc_paper:   mean={rdf['fc_paper'].mean():.3f} (reference column)")
+    print(f"fc_paper:   mean={rdf['fc_paper'].mean():.3f} (attack threshold in match_summary.csv)")
     print(f"fc_degree vs fc_paper correlation: {rdf['fc_degree'].corr(rdf['fc_paper']):.4f}")
     print(f"fc_ebc < fc_degree: {(rdf['fc_ebc'] < rdf['fc_degree']).sum()}/{len(rdf)} "
           f"= {(rdf['fc_ebc'] < rdf['fc_degree']).mean():.1%}")
@@ -281,8 +280,28 @@ def print_summary(rdf):
           f"= {(rdf['chi_ebc'] < rdf['chi_degree']).mean():.1%}")
 
 
+def check_shipped(rdf):
+    """Acceptance check of the shipped results against Supplementary Section S14."""
+    checks = [("networks", len(rdf), GATE_N, 0),
+              ("f_c(EBC) < f_c(degree) (%)",
+               100 * (rdf['fc_ebc'] < rdf['fc_degree']).mean(), GATE_PCT_EBC_LOWER, 0.05)]
+    for col, exp in GATE_MEAN.items():
+        checks.append((f"mean {col}", rdf[col].mean(), exp, 0.0005))
+    for col, exp in GATE_PCT_BELOW_01.items():
+        checks.append((f"{col} < 0.1 (%)", 100 * (rdf[col] < 0.1).mean(), exp, 0.05))
+    failed = False
+    for label, got, exp, tol in checks:
+        ok = abs(got - exp) <= tol + 1e-12
+        failed |= not ok
+        print(f"  {label:<28} {got:10.4f} vs {exp:8.3f}  {'PASS' if ok else 'FAIL'}")
+    if failed:
+        print("GATE FAILED  shipped results differ from Supplementary Section S14")
+        sys.exit(1)
+    print("GATE PASS  shipped results match Supplementary Section S14")
+
+
 def run_plot():
-    """Reproduce the supplementary three-panel figure from the shipped CSV."""
+    """Draw Fig. S10 from the shipped results file."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -293,27 +312,20 @@ def run_plot():
                          'mathtext.fontset': 'cm', 'axes.unicode_minus': False})
 
     rdf = pd.read_csv(SUPP_DATA / 'ebc_vs_degree_all_matches.csv')
-
-    # Acceptance gate: reproduce the numbers quoted in Supplementary S14
+    check_shipped(rdf)
     n = len(rdf)
     pct = (rdf['fc_ebc'] < rdf['fc_degree']).mean()
-    assert n == 4343, n
-    assert abs(pct - 0.746) < 0.001, pct
-    assert abs(rdf['fc_degree'].mean() - 0.423) < 0.001
-    assert abs(rdf['fc_ebc'].mean() - 0.314) < 0.001
-    print(f'GATE PASS: n={n}, EBC collapses earlier in {pct:.1%} of matches, '
-          f'means {rdf.fc_degree.mean():.3f}/{rdf.fc_ebc.mean():.3f}')
 
     fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.3))
 
     ax = axes[0]
     ax.scatter(rdf['fc_degree'], rdf['fc_ebc'], s=4, alpha=0.15, c='#1B4F72', linewidths=0)
     ax.plot([0, 0.9], [0, 0.9], 'k--', alpha=0.5, lw=0.8)
-    ax.set_xlabel(r'$f_c$ (degree-based attack)')
-    ax.set_ylabel(r'$f_c$ (EBC attack)')
-    ax.set_title(rf'(a) $f_c$ comparison (N = {n:,})', fontsize=9.5)
+    ax.set_xlabel(r'$f_{c,\mathrm{L2}}$ (degree-based attack)')
+    ax.set_ylabel(r'$f_{c,\mathrm{L2}}$ (EBC attack)')
+    ax.set_title(rf'(a) $f_{{c,\mathrm{{L2}}}}$ comparison (N = {n:,})', fontsize=9.5)
     ax.set_xlim(0, 0.9); ax.set_ylim(0, 0.9)
-    ax.text(0.04, 0.86, f'{pct:.1%} of matches:\n' + r'$f_c^{\mathrm{EBC}} < f_c^{\mathrm{degree}}$',
+    ax.text(0.04, 0.86, f'{pct:.1%} of matches:\n' + r'$f_{c,\mathrm{L2}}^{\mathrm{EBC}} < f_{c,\mathrm{L2}}^{\mathrm{degree}}$',
             transform=ax.transAxes, fontsize=8, bbox=dict(facecolor='#f5e9d0', alpha=0.9, lw=0.4))
 
     ax = axes[1]
@@ -332,24 +344,25 @@ def run_plot():
             label=f'Degree-based (mean = {rdf.fc_degree.mean():.3f})')
     ax.hist(rdf['fc_ebc'], bins=40, alpha=0.6, color='#2e7d32',
             label=f'EBC (mean = {rdf.fc_ebc.mean():.3f})')
-    ax.set_xlabel(r'$f_c$'); ax.set_ylabel('Count')
-    ax.set_title(r'(c) $f_c$ distributions', fontsize=9.5)
+    ax.set_xlabel(r'$f_{c,\mathrm{L2}}$'); ax.set_ylabel('Count')
+    ax.set_title(r'(c) $f_{c,\mathrm{L2}}$ distributions', fontsize=9.5)
     ax.legend(fontsize=7.5, frameon=False)
 
     for a in axes:
         a.spines[['top', 'right']].set_visible(False)
     fig.tight_layout()
-    fig.savefig(_SCRIPT_DIR / 'fig_ebc_summary.pdf')
-    fig.savefig(_SCRIPT_DIR / 'fig_ebc_summary.png', dpi=200)
-    print('saved fig_ebc_summary.pdf/.png')
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIG_DIR / 'figS10.pdf')
+    fig.savefig(FIG_DIR / 'figS10.png', dpi=200)
+    print('Saved figures/figS10.pdf, figures/figS10.png')
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--plot", action="store_true",
-                    help="only reproduce the figure from the shipped results CSV")
+                    help="only draw Fig. S10 from the shipped results file")
     ap.add_argument("--limit", type=int, default=None,
-                    help="process only the first N filtered rows (adaptation check)")
+                    help="process only the first N filtered rows (quick check)")
     args = ap.parse_args()
     if args.plot:
         run_plot()

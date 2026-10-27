@@ -1,24 +1,24 @@
 """
-cross_sectional_validation.py — Cross-sectional association between structural residuals and market valuation (Table 4)
-======================================================================================================================
-Computes player structural residual z-scores independently per season, then
-correlates them with same-season Transfermarkt valuations using Spearman
-correlation and partial correlation (controlling for ppg + age). Outputs
-all numbers for Table 4.
+table4_market_value.py  Structural residual score and market value (Table 4)
+==================================================================================
+Computes the volume-adjusted residual score of each player within team and
+season, and relates it to same-season Transfermarkt market values with the
+Spearman correlation and the partial correlation controlling for passes per
+game and age (Table 4). Also prints the within-team rank analysis, the
+comparison of high-residual and neutral players, and the share of midfielders
+among high-residual players reported in Section 3.5.
 
-Input:
-  - data/player_impact_{season}.csv (three seasons)
-  - data/market_value_validation_all_seasons.csv
-  - data/transfermarkt_player_valuations.csv
-  - data/transfermarkt_players.csv
+Input  data/player_impact_{season}.csv (three seasons), data/market_value_validation_all_seasons.csv,
+       data/transfermarkt_player_valuations.csv, data/transfermarkt_players.csv
+Output  printed values; exits with status 1 if Table 4 or the midfielder share differ from the article
 
-Output: Table 4 values (printed to console)
+Usage
+  python code/table4_market_value.py
 
-Usage:
-  python code/cross_sectional_validation.py
-
-Last modified: 2026-03-27
+Last modified 2026-10-27
 """
+
+import sys
 
 import pandas as pd
 import numpy as np
@@ -72,7 +72,17 @@ def partial_spearman(z_vals, value_vals, ppg_vals, age_vals):
     return stats.spearmanr(z_r, v_r)
 
 
+# Table 4 and Section 3.5 of the article
+PUBLISHED_TABLE4 = {
+    '2022/23': dict(n=902, rho=0.178, partial=0.227),
+    '2023/24': dict(n=920, rho=0.189, partial=0.208),
+    '2024/25': dict(n=846, rho=0.132, partial=0.148),
+}
+MIDFIELDER_SHARE_RANGE = (57, 61)  # percent of high-residual players, rounded
+
+
 def main():
+    failures = []
     mv_match = pd.read_csv(DATA_DIR / 'market_value_validation_all_seasons.csv')
     vals = pd.read_csv(DATA_DIR / 'transfermarkt_player_valuations.csv')
     players_tm = pd.read_csv(DATA_DIR / 'transfermarkt_players.csv')
@@ -133,6 +143,11 @@ def main():
         print(f"  n = {len(result)}")
         print(f"  Spearman rho = {rho:.3f}, P = {p:.2e}")
         print(f"  Partial rho = {rho_p:.3f}, P = {p_p:.2e} (n_valid={len(valid)})")
+        pub = PUBLISHED_TABLE4[season]
+        if (len(result) != pub['n'] or abs(rho - pub['rho']) > 5e-4
+                or abs(rho_p - pub['partial']) > 5e-4 or max(p, p_p) >= 0.001):
+            failures.append(f"Table 4 {season}: n={len(result)} rho={rho:.4f} partial={rho_p:.4f} "
+                            f"(article n={pub['n']} rho={pub['rho']} partial={pub['partial']}, all P < 0.001)")
 
     # Within-team rank analysis
     print("\n" + "=" * 70)
@@ -159,6 +174,8 @@ def main():
         print(f"\n{season} ({len(team_rhos_z)} teams):")
         print(f"  Within-team residual vs value: avg rho = {avg_z:.3f}, P = {p_z:.2e}")
         print(f"  Within-team pass volume vs value: avg rho = {avg_ppg:.3f}")
+        if not (avg_z > 0 and p_z < 0.05 and avg_z > avg_ppg):
+            failures.append(f"{season}: within-team residual rho {avg_z:.3f} not positive or not above pass volume {avg_ppg:.3f}")
 
     # High-residual vs neutral group
     print("\n" + "=" * 70)
@@ -175,6 +192,30 @@ def main():
         print(f"  High residual (z>1s): n={len(high)}, median=EUR{high['value'].median()/1e6:.1f}M")
         print(f"  Neutral (|z|<0.5s): n={len(neutral)}, median=EUR{neutral['value'].median()/1e6:.1f}M")
         print(f"  Ratio: {ratio:.1f}x, P = {p_mw:.2e}")
+        if not high['value'].median() > neutral['value'].median():
+            failures.append(f"{season}: high-residual median value not above neutral")
+
+    # Share of midfielders among high-residual players (Transfermarkt position)
+    print("\n" + "=" * 70)
+    print("Positions of high-residual players (z > 1)")
+    print("=" * 70)
+    pid_to_pos = dict(zip(players_tm['player_id'], players_tm['position']))
+    for season, result in all_season_data.items():
+        high = result[result['z'] > 1.0]
+        pos = high['player'].map(name_to_pid).map(pid_to_pos).dropna()
+        pos = pos[pos != 'Missing']
+        share = 100 * (pos == 'Midfield').mean()
+        print(f"  {season}: {share:.1f}% midfielders (n = {len(pos)} with a recorded position)")
+        if not MIDFIELDER_SHARE_RANGE[0] - 0.5 <= share < MIDFIELDER_SHARE_RANGE[1] + 0.5:
+            failures.append(f"{season}: midfielder share {share:.1f}% outside 57%-61%")
+
+    print()
+    if failures:
+        print("ACCEPTANCE CHECK FAILED")
+        for f in failures:
+            print("  -", f)
+        sys.exit(1)
+    print("ACCEPTANCE CHECK PASSED  Table 4 and the Section 3.5 values match the article")
 
 
 if __name__ == '__main__':
