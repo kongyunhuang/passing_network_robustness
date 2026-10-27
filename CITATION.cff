@@ -1,0 +1,61 @@
+cff-version: 1.2.0
+message: "If you use this code or data, please cite the article below."
+title: "Code and data for: Scale-dependent applicability of directed mean-field percolation in soccer passing networks"
+repository-code: "https://github.com/kongyunhuang/passing_network_robustness"
+license: MIT
+authors:
+  - family-names: Huang
+    given-names: Kongyun
+    orcid: "https://orcid.org/0009-0003-4689-4329"
+  - family-names: Zhou
+    given-names: Changjing
+    orcid: "https://orcid.org/0000-0002-5666-9120"
+  - family-names: Xiong
+    given-names: Xiuyuan
+    orcid: "https://orcid.org/0009-0007-3087-5587"
+  - family-names: Yang
+    given-names: Xudong
+    orcid: "https://orcid.org/0000-0003-2344-9444"
+  - family-names: Song
+    given-names: Yingzhe
+    orcid: "https://orcid.org/0009-0002-4015-9852"
+  - family-names: Xu
+    given-names: Kai
+    orcid: "https://orcid.org/0000-0002-1403-4127"
+  - family-names: Martínez
+    given-names: Johann H.
+    orcid: "https://orcid.org/0000-0002-3365-8189"
+  - family-names: Gómez-Ruano
+    given-names: Miguel-Ángel
+    orcid: "https://orcid.org/0000-0002-9585-3158"
+  - family-names: Buldú
+    given-names: Javier M.
+    orcid: "https://orcid.org/0000-0002-9345-599X"
+preferred-citation:
+  type: article
+  title: "Scale-dependent applicability of directed mean-field percolation in soccer passing networks"
+  journal: "Chaos, Solitons & Fractals"
+  volume: 213
+  start: 119356
+  year: 2026
+  month: 12
+  doi: "10.1016/j.chaos.2026.119356"
+  authors:
+    - family-names: Huang
+      given-names: Kongyun
+    - family-names: Zhou
+      given-names: Changjing
+    - family-names: Xiong
+      given-names: Xiuyuan
+    - family-names: Yang
+      given-names: Xudong
+    - family-names: Song
+      given-names: Yingzhe
+    - family-names: Xu
+      given-names: Kai
+    - family-names: Martínez
+      given-names: Johann H.
+    - family-names: Gómez-Ruano
+      given-names: Miguel-Ángel
+    - family-names: Buldú
+      given-names: Javier M.

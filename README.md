@@ -1,6 +1,10 @@
-# Scale-dependent Applicability of Directed Mean-field Percolation in Soccer Passing Networks
+# Scale-dependent applicability of directed mean-field percolation in soccer passing networks
 
-Code and data for reproducing the results in the paper.
+Code and data for reproducing the results in:
+
+> Huang K, Zhou C, Xiong X, Yang X, Song Y, Xu K, Martínez JH, Gómez-Ruano MÁ, Buldú JM.
+> *Scale-dependent applicability of directed mean-field percolation in soccer passing networks.*
+> Chaos, Solitons & Fractals 213 (2026) 119356. https://doi.org/10.1016/j.chaos.2026.119356
 
 ## Revision Update (July 2026)
 
@@ -221,3 +225,19 @@ Several supplementary scripts embed acceptance gates that re-verify the publishe
 - The 14 analysis scripts directly under `code/` read the original-protocol CSVs and reproduce the originally submitted analysis; the revised-protocol analyses are covered by `code/pipeline/`, `code/supplementary/`, `code/synthetic_baselines_generator.py`, and Cell 1c of the notebook
 - `data/stat_*.csv` retain the original submission values (N = 4,343); the corresponding revised-protocol statistics (N = 4,330) are re-verified by the acceptance gates in `supplementary/s12_pca.py`
 - Revised percolation parameters: 100 Monte Carlo trials at all scales, peak-validity restriction at 5% of the initial order parameter, 50 removal levels, seed 42
+
+## Citation
+
+If you use this code or data, please cite:
+
+```bibtex
+@article{Huang2026CSF,
+  author  = {Huang, Kongyun and Zhou, Changjing and Xiong, Xiuyuan and Yang, Xudong and Song, Yingzhe and Xu, Kai and Mart{\'i}nez, Johann H. and G{\'o}mez-Ruano, Miguel-{\'A}ngel and Buld{\'u}, Javier M.},
+  title   = {Scale-dependent applicability of directed mean-field percolation in soccer passing networks},
+  journal = {Chaos, Solitons \& Fractals},
+  volume  = {213},
+  pages   = {119356},
+  year    = {2026},
+  doi     = {10.1016/j.chaos.2026.119356}
+}
+```
